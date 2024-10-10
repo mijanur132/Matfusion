@@ -452,8 +452,10 @@ class AdaptiveWrapper(Module):
     ):
 
         x = self.layernorm(x)
-
+        print("x at 455:",x.shape)   #torch.Size([2, 1023, 512])
         x = x * (self.layernorm_gamma + 1.)
+
+        print("x at 458:",x.shape) #torch.Size([2, 1023, 512])
 
         out = self.fn(x, **kwargs)
 
@@ -689,7 +691,8 @@ class Attention(Module):
 
             if self.softcap_value > 0.:
                 flex_attn_kwargs.update(score_mod = softcap_score_mod(self.softcap_value))
-
+            
+            print("q, k, v:", q.shape, k.shape, v.shape)
             out = flex_attention(q, k, v, **flex_attn_kwargs)
 
         else:
@@ -749,6 +752,7 @@ class Transformer(Module):
 
         self.dim = dim
         self.dim_head = dim_head
+        self.heads = heads
 
         self.to_time_cond = nn.Sequential(
             RandomFourierEmbed(dim),
@@ -815,7 +819,9 @@ class Transformer(Module):
         if needs_masking:
             if causal_mask:
                 if should_use_flex_attn:
-                    block_mask = create_block_mask(causal, B = None, H = None, Q_LEN = seq_len, KV_LEN = seq_len, device = device)
+
+                    #block_mask = create_block_mask(causal, B = None, H = None, Q_LEN = seq_len, KV_LEN = seq_len, device = device)
+                    block_mask = create_block_mask(causal, B = batch, H = self.heads, Q_LEN = seq_len, KV_LEN = seq_len, device = device)
                     attn_mask_kwargs.update(block_mask = block_mask)
                 else:
                     attn_mask_kwargs.update(causal = True)
@@ -945,12 +951,13 @@ class Transfusion(Module):
         self.transformer = transformer
         dim = transformer.dim
 
-        self.dim = dim
+        self.dim = dim 
 
         # latent and model dimension not the same
         # make it work for 1 modality for now
 
         dim_latent = default(dim_latent, dim)
+        print("dim_latent:", dim_latent, dim)  #384, 3*64*64, 512
 
         self.dim_latents = cast_tuple(dim_latent)
 
@@ -1029,7 +1036,7 @@ class Transfusion(Module):
         assert len(self.modality_token_transform) == self.num_modalities
 
         self.latent_to_model_projs = ModuleList([Linear(dim_latent, dim) if dim_latent != dim else nn.Identity() for dim_latent in self.dim_latents])
-
+        print("self.latent_to_model_projs:", self.latent_to_model_projs)
         # relative positions
 
         self.rotary_emb = RotaryEmbedding(transformer.dim_head)
@@ -1302,11 +1309,13 @@ class Transfusion(Module):
         Float['b n d'] |
         tuple[Float['b n d'], list[Float['...']]]
     ):
-
+        print("1311:", text.shape)
         device = self.device
         text = text.to(device)
 
         text, labels = text[:, :-1], text[:, 1:]
+        
+        print("1317:", text.shape, labels.shape)
 
         # embed text
 
@@ -1319,6 +1328,9 @@ class Transfusion(Module):
         pos = torch.arange(seq_len, device = device)
 
         rotary_emb = self.rotary_emb(pos)
+
+        print("1331: text.shape, tokens.shape, pos.shape, rotart_emb.shape", text.shape, tokens.shape, pos.shape, rotary_emb.shape)
+        # text.shape, tokens.shape, pos.shape, rotart_emb.shape torch.Size([2, 1023]) torch.Size([2, 1023, 512]) torch.Size([1023]) torch.Size([1023, 64])
 
         # attention
 
@@ -1392,7 +1404,7 @@ class Transfusion(Module):
         flow = tokens - noise
 
         # attention
-
+        print("noised tokens:", noised_tokens.shape)
         noised_tokens = latent_to_model_fn(noised_tokens)
 
         embed = self.transformer(

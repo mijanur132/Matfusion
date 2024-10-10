@@ -1,6 +1,9 @@
 import pytest
 from functools import partial
 from copy import deepcopy
+import sys
+
+sys.path.insert(0,'/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch')
 
 from torch import nn, randint, randn, tensor, cuda
 
@@ -18,16 +21,17 @@ def test_transfusion(
     cache_kv: bool,
     use_flex_attn: bool
 ):
-
     if use_flex_attn and (not exists(flex_attention) or not cuda_available):
         return pytest.skip()
+
+    print("line 26............")
 
     text_tokens = 8
     randint_ = partial(randint, 0, text_tokens)
 
     model = Transfusion(
         num_text_tokens = text_tokens,
-        dim_latent = (384, 192), # specify multiple latent dimensions
+        dim_latent = (384, 192), # specify multiple latent dimensions, one for each modality
         modality_default_shape = ((32,), (64,)),
         transformer = dict(
             dim = 512,
@@ -103,6 +107,7 @@ def test_text(
 ):
 
     if use_flex_attn and (not exists(flex_attention) or not cuda_available):
+        print("skipping...")
         return pytest.skip()
 
     model = Transfusion(
@@ -120,7 +125,8 @@ def test_text(
     if use_flex_attn:
         model = model.cuda()
 
-    text = randint(0, 256, (2, 1024))
+    text = randint(0, 256, (2, 1025))
+    print("text:",text.shape)
 
     model(text, return_loss = return_loss)
 
@@ -128,7 +134,8 @@ def test_modality_only():
 
     model = Transfusion(
         num_text_tokens = 256,
-        dim_latent = (384, 192),
+       #dim_latent = (384, 192),
+        dim_latent = (384, 3), #second dimension in images dimension below is the second one here
         channel_first_latent = True,
         modality_default_shape = (32,),
         transformer = dict(
@@ -138,7 +145,8 @@ def test_modality_only():
         )
     )
 
-    images = randn(2, 192, 8, 8)
+    #images = randn(2, 192, 8, 8)
+    images = randn(2, 3, 64, 64)
 
     loss = model(images, return_loss = True, modality_type = 1)
 
