@@ -44,6 +44,8 @@ from jaxtyping import jaxtyped
 from beartype import beartype
 from beartype.door import is_bearable
 
+
+
 class TorchTyping:
     def __init__(self, abstract_dtype):
         self.abstract_dtype = abstract_dtype
@@ -452,10 +454,10 @@ class AdaptiveWrapper(Module):
     ):
 
         x = self.layernorm(x)
-        print("x at 455:",x.shape)   #torch.Size([2, 1023, 512])
+        #print("x at 455:",x.shape)   #torch.Size([2, 1023, 512])
         x = x * (self.layernorm_gamma + 1.)
 
-        print("x at 458:",x.shape) #torch.Size([2, 1023, 512])
+       # print("x at 458:",x.shape) #torch.Size([2, 1023, 512])
 
         out = self.fn(x, **kwargs)
 
@@ -692,7 +694,7 @@ class Attention(Module):
             if self.softcap_value > 0.:
                 flex_attn_kwargs.update(score_mod = softcap_score_mod(self.softcap_value))
             
-            print("q, k, v:", q.shape, k.shape, v.shape)
+           # print("q, k, v:", q.shape, k.shape, v.shape)
             out = flex_attention(q, k, v, **flex_attn_kwargs)
 
         else:
@@ -957,7 +959,7 @@ class Transfusion(Module):
         # make it work for 1 modality for now
 
         dim_latent = default(dim_latent, dim)
-        print("dim_latent:", dim_latent, dim)  #384, 3*64*64, 512
+       # print("dim_latent:", dim_latent, dim)  #384, 3*64*64, 512
 
         self.dim_latents = cast_tuple(dim_latent)
 
@@ -1036,7 +1038,7 @@ class Transfusion(Module):
         assert len(self.modality_token_transform) == self.num_modalities
 
         self.latent_to_model_projs = ModuleList([Linear(dim_latent, dim) if dim_latent != dim else nn.Identity() for dim_latent in self.dim_latents])
-        print("self.latent_to_model_projs:", self.latent_to_model_projs)
+       # print("self.latent_to_model_projs:", self.latent_to_model_projs)
         # relative positions
 
         self.rotary_emb = RotaryEmbedding(transformer.dim_head)
@@ -1309,13 +1311,13 @@ class Transfusion(Module):
         Float['b n d'] |
         tuple[Float['b n d'], list[Float['...']]]
     ):
-        print("1311:", text.shape)
+        #print("1311:", text.shape)
         device = self.device
         text = text.to(device)
 
         text, labels = text[:, :-1], text[:, 1:]
         
-        print("1317:", text.shape, labels.shape)
+        #print("1317:", text.shape, labels.shape)
 
         # embed text
 
@@ -1329,7 +1331,7 @@ class Transfusion(Module):
 
         rotary_emb = self.rotary_emb(pos)
 
-        print("1331: text.shape, tokens.shape, pos.shape, rotart_emb.shape", text.shape, tokens.shape, pos.shape, rotary_emb.shape)
+       # print("1331: text.shape, tokens.shape, pos.shape, rotart_emb.shape", text.shape, tokens.shape, pos.shape, rotary_emb.shape)
         # text.shape, tokens.shape, pos.shape, rotart_emb.shape torch.Size([2, 1023]) torch.Size([2, 1023, 512]) torch.Size([1023]) torch.Size([1023, 64])
 
         # attention
@@ -1404,7 +1406,7 @@ class Transfusion(Module):
         flow = tokens - noise
 
         # attention
-        print("noised tokens:", noised_tokens.shape)
+        #print("noised tokens:", noised_tokens.shape)
         noised_tokens = latent_to_model_fn(noised_tokens)
 
         embed = self.transformer(

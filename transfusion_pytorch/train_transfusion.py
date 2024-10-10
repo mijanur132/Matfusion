@@ -1,4 +1,4 @@
-import pytest
+
 from functools import partial
 from copy import deepcopy
 import sys
@@ -6,6 +6,7 @@ import json
 import torch
 from torch.utils.data import Dataset, DataLoader
 import os
+import wandb
 
 sys.path.insert(0,'/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch')
 
@@ -13,14 +14,16 @@ from torch import nn, randint, randn, tensor, cuda
 
 cuda_available = cuda.is_available()
 
+wandb.init( project="transfusion")
+  
+
 from transfusion_pytorch.transfusion import (
     Transfusion,
     flex_attention,
     exists
 )
 
-@pytest.mark.parametrize('cache_kv', (False, True))
-@pytest.mark.parametrize('use_flex_attn', (False, True))
+
 def test_transfusion(
     cache_kv: bool,
     use_flex_attn: bool
@@ -70,7 +73,7 @@ def test_transfusion(
     print("one_multimodal_sample:",one_multimodal_sample)
 
 
-@pytest.mark.parametrize('use_flex_attn', (False, True))
+
 def test_auto_modality_transform(
     use_flex_attn: bool
 ):
@@ -150,17 +153,45 @@ def create_dataloader(directory, batch_size=2, shuffle=True, transform=None):
 
 def train():
     # Usage
-    directory = '/path/to/dataset'
-    dataloader = create_dataloader(directory, batch_size=32, transform=custom_transform)
+    directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/token_text'
+    dataloader = create_dataloader(directory, batch_size=2, transform=None)
 
     # To iterate over data in your training loop
-    for normalized_tokens in dataloader:
-        # Training logic here
-        print(normalized_tokens.size())
+    for step, normalized_tokens in enumerate(dataloader):
+        zeros_tensor = torch.zeros(2, 1)
+
+        normalized_tokens = torch.cat((normalized_tokens, zeros_tensor), dim = 1)
+        #print(normalized_tokens.size())
+        normalized_tokens = normalized_tokens.cuda().long()
+
+        use_flex_attn = True
+        return_loss = True
+
+        if use_flex_attn and (not exists(flex_attention) or not cuda_available):
+            print("skipping...")
 
 
-@pytest.mark.parametrize('use_flex_attn', (False, True))
-@pytest.mark.parametrize('return_loss', (False, True))
+        model = Transfusion(
+            num_text_tokens = 256,
+            dim_latent = 384,
+            channel_first_latent = True,
+            modality_default_shape = (32,),
+            transformer = dict(
+                dim = 512,
+                depth = 2,
+                use_flex_attn = use_flex_attn
+            )
+        )
+
+        if use_flex_attn:
+            model = model.cuda()
+
+        loss = model(normalized_tokens, return_loss = return_loss)
+        loss.backward()
+        print("loss: ",loss.item())
+        wandb.log({"step": step, "train_loss": loss.item()})
+
+
 
 def test_text(
     use_flex_attn: bool,
@@ -186,26 +217,9 @@ def test_text(
     if use_flex_attn:
         model = model.cuda()
 
-    #text = randint(0, 256, (2, 1025))
-    with open("/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/token_text/mp-23.cif.json", 'r') as file:
-        data=json.load(file)
-    tokens1=data['input_ids'][0]+[0]+data['input_ids'][0]
-    with open("/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/token_text/mp-30.cif.json", 'r') as file:
-        data=json.load(file)
-    tokens2=data['input_ids'][0]+[0]+data['input_ids'][0]
-    text=torch.stack([torch.tensor(tokens1),torch.tensor(tokens2)], dim=0)
-    min_val = torch.min(text)
-    max_val = torch.max(text)
+    text = randint(0, 256, (2, 1025))
 
-    # Apply the normalization formula
-    text2 = ((text - min_val) / (max_val - min_val)) * 256
-
-    text2=text2.long()
-    print(text2.shape)
-    text2=text2.cuda()
-   
-
-    model(text2, return_loss = return_loss)
+    model(text, return_loss = return_loss)
 
 def test_modality_only():
 
@@ -230,7 +244,6 @@ def test_modality_only():
     loss.backward()
 
 
-@pytest.mark.parametrize('custom_time_fn', (False, True))
 def test_text_image_end_to_end(
     custom_time_fn: bool
 ):
@@ -337,3 +350,7 @@ def test_velocity_consistency():
     loss.backward()
 
     assert exists(breakdown.velocity)
+
+
+if __name__=="__main__":
+    train()
