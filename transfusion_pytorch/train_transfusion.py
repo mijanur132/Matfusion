@@ -1,12 +1,19 @@
-
 from functools import partial
 from copy import deepcopy
 import sys
 import json
 import torch
-from torch.utils.data import Dataset, DataLoader
 import os
 import wandb
+import torch.optim as optim
+import numpy as np
+
+import torch.distributed as dist 
+from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DistributedSampler as DS
+from torch.nn.parallel import DistributedDataParallel as DDP
+
+
 
 sys.path.insert(0,'/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch')
 
@@ -14,7 +21,7 @@ from torch import nn, randint, randn, tensor, cuda
 
 cuda_available = cuda.is_available()
 
-wandb.init( project="transfusion")
+#wandb.init( project="transfusion")
   
 
 from transfusion_pytorch.transfusion import (
@@ -22,6 +29,24 @@ from transfusion_pytorch.transfusion import (
     flex_attention,
     exists
 )
+
+# def init_distributed(rank,local_rank,ws,address,port):
+#   dist.init_process_group(backend="nccl", init_method=f"tcp://{address}:{port}", rank=rank, world_size=ws)
+
+#   torch.cuda.set_device(local_rank)
+#   print("***************rank and world size*****************:",dist.get_rank(), dist.get_world_size()) ### most like wrong
+
+
+
+# def setup():
+#     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+#     if device.type == 'cuda':
+#         print("GPU is available")
+#     else:
+#         print("GPU is not available, using CPU")
+
+
 
 
 def test_transfusion(
@@ -114,84 +139,90 @@ def test_auto_modality_transform(
 
 
 class TokenDataset(Dataset):
-    def __init__(self, directory, transform=None):
-        """
-        Args:
-            directory (string): Path to the directory with JSON files.
-            transform (callable, optional): Optional transform to be applied on a sample.
-        """
+    def __init__(self, directory):
         self.directory = directory
         self.filenames = [f for f in os.listdir(directory) if f.endswith('.json')]
-        self.transform = transform
-
     def __len__(self):
-        return len(self.filenames)
-
+            return len(self.filenames)
     def __getitem__(self, idx):
         file_path = os.path.join(self.directory, self.filenames[idx])
         with open(file_path, 'r') as file:
             data = json.load(file)
         tokens = data['input_ids'][0]
-        
-        # Assuming you want to normalize as discussed
         tokens_tensor = torch.tensor(tokens, dtype=torch.float32)
-        min_val = torch.min(tokens_tensor)
-        max_val = torch.max(tokens_tensor)
-        normalized_tokens = ((tokens_tensor - min_val) / (max_val - min_val)) * 256
-        normalized_tokens = normalized_tokens.long()  # Convert to integer
-        
-        if self.transform:
-            normalized_tokens = self.transform(normalized_tokens)
-        
-        return normalized_tokens
+        return tokens_tensor
+
+class ImageDataset(Dataset):
+    def __init__(self, directory):
+        self.directory = directory
+        self.filenames = [f for f in os.listdir(directory) if f.endswith('.npy')]
+    def __len__(self):
+        return len(self.filenames)
+    def __getitem__(self, idx):
+        file_path = os.path.join(self.directory, self.filenames[idx])
+        data = np.load(file_path)
+        data_tensor = torch.from_numpy(data).float()
+        return data_tensor
 
 
-def create_dataloader(directory, batch_size=2, shuffle=True, transform=None):
-    dataset = TokenDataset(directory, transform=transform)
+
+def create_dataloader(directory, batch_size=12, shuffle=True):
+    dataset = TokenDataset(directory)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=4)
     return dataloader
+
+def create_image_dataloader(directory, batch_size=12, shuffle=True):
+    dataset = ImageDataset(directory)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=4)
+    return dataloader
+
 
 def train():
     # Usage
     directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/token_text'
     dataloader = create_dataloader(directory, batch_size=2, transform=None)
 
-    # To iterate over data in your training loop
-    for step, normalized_tokens in enumerate(dataloader):
-        zeros_tensor = torch.zeros(2, 1)
+    use_flex_attn = True
+    return_loss = True
 
-        normalized_tokens = torch.cat((normalized_tokens, zeros_tensor), dim = 1)
-        #print(normalized_tokens.size())
-        normalized_tokens = normalized_tokens.cuda().long()
+    if use_flex_attn and (not exists(flex_attention) or not cuda_available):
+        print("skipping...")
 
-        use_flex_attn = True
-        return_loss = True
-
-        if use_flex_attn and (not exists(flex_attention) or not cuda_available):
-            print("skipping...")
-
-
-        model = Transfusion(
-            num_text_tokens = 256,
-            dim_latent = 384,
-            channel_first_latent = True,
-            modality_default_shape = (32,),
-            transformer = dict(
-                dim = 512,
-                depth = 2,
-                use_flex_attn = use_flex_attn
-            )
+    model = Transfusion(
+        num_text_tokens = 30000,
+        dim_latent = 384,
+        channel_first_latent = True,
+        modality_default_shape = (32,),
+        transformer = dict(
+            dim = 512,
+            depth = 2,
+            use_flex_attn = use_flex_attn
         )
+    )
+    optimizer = optim.Adam(model.parameters(), lr=0.00001)  # Learning rate might need tuning
 
-        if use_flex_attn:
-            model = model.cuda()
+    if use_flex_attn:
+        model = model.cuda()
 
-        loss = model(normalized_tokens, return_loss = return_loss)
-        loss.backward()
-        print("loss: ",loss.item())
-        wandb.log({"step": step, "train_loss": loss.item()})
-
-
+    # To iterate over data in your training loop
+    num_epochs=100
+    global_max = 0
+    for epoch in range(num_epochs):
+        for step, _tokens in enumerate(dataloader):
+            optimizer.zero_grad()
+            global_max= max(torch.max(_tokens),global_max)
+            print("global max:.....",global_max)
+            zeros_tensor = torch.zeros(2, 1)
+            normalized_tokens = torch.cat((zeros_tensor,_tokens), dim = 1)
+            #print(normalized_tokens.size(),normalized_tokens[0])
+            normalized_tokens = normalized_tokens.cuda().long()
+            loss = model(normalized_tokens, return_loss = return_loss)
+            loss.backward()
+            optimizer.step()
+            print("epcho step loss: ",epoch, step, loss.item())
+           # wandb.log({"step": step, "train_loss": loss.item()})
+            if torch.isnan(loss):
+                break
 
 def test_text(
     use_flex_attn: bool,
@@ -221,6 +252,43 @@ def test_text(
 
     model(text, return_loss = return_loss)
 
+
+def train_modality():
+  
+    directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/numpy_files/train'
+    dataloader = create_image_dataloader(directory, batch_size=1)
+
+    model = Transfusion(
+        num_text_tokens = 256,
+        #dim_latent = (384, 192), #second dimension in images dimension below is the second one here
+        dim_latent = (384, 3),
+        channel_first_latent = True,
+        modality_default_shape = (32,),
+        transformer = dict(
+            dim = 512,
+            depth = 2,
+            use_flex_attn = False
+        )
+    )
+    optimizer = optim.Adam(model.parameters(), lr=0.00001)  # Learning rate might need tuning
+    model = model.cuda()
+    num_epochs=100
+    global_max = 0
+    for epoch in range(num_epochs):
+        for step, _images in enumerate(dataloader):
+            print(_images.shape) #2,3,128,128
+            optimizer.zero_grad()
+            #images = randn(2, 192, 8, 8)
+            images = _images.cuda()
+            loss = model(images, return_loss = True, modality_type = 1)
+            loss.backward()
+            optimizer.step()
+            print("epcho step loss: ",epoch, step, loss.item())
+            #wandb.log({"step": step, "train_loss": loss.item()})
+            if torch.isnan(loss):
+                break
+
+
 def test_modality_only():
 
     model = Transfusion(
@@ -235,10 +303,8 @@ def test_modality_only():
             use_flex_attn = False
         )
     )
-
     #images = randn(2, 192, 8, 8)
-    images = randn(2, 3, 64, 64)
-
+    images = randn(2, 3, 128, 128)
     loss = model(images, return_loss = True, modality_type = 1)
 
     loss.backward()
@@ -353,4 +419,5 @@ def test_velocity_consistency():
 
 
 if __name__=="__main__":
-    train()
+    #train()
+    train_modality()

@@ -223,7 +223,7 @@ def test_modality_only():
     )
 
     #images = randn(2, 192, 8, 8)
-    images = randn(2, 3, 64, 64)
+    images = randn(2, 3, 128, 128)
 
     loss = model(images, return_loss = True, modality_type = 1)
 

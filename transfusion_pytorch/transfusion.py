@@ -664,7 +664,7 @@ class Attention(Module):
         # pre rmsnorm and project to queries, keys, values
 
         x = self.norm(x)
-
+        print(f" x shape at 667: {x.shape}")
         q, k, v = self.to_qkv(x)
 
         # handle cache being passed in
@@ -733,15 +733,21 @@ class Attention(Module):
 
         return out, kv_cache
 
+#     transformer = dict(
+#         dim = 512,
+#         depth = 2,
+#         use_flex_attn = use_flex_attn
+
+
 class Transformer(Module):
     @beartype
     def __init__(
         self,
-        dim,
+        dim,    # dim = 512, this means each word or token in the input sequence will be represented as a vector of 512 elements
         *,
-        depth,
-        dim_head = 64,
-        heads = 8,
+        depth,  # number of layers in the xformer
+        dim_head = 64, # The dimension of each attention head
+        heads = 8,  # number of attention head
         dropout = 0.,
         ff_expansion_factor = 4,
         attn_kwargs: dict = dict(),
@@ -917,21 +923,28 @@ class Transformer(Module):
 
         return out, torch.stack(new_cache)
 
-# classes
 
+    # model = Transfusion(
+    #     num_text_tokens = 30000,
+    #     dim_latent = 384,
+    #     channel_first_latent = True,
+    #     modality_default_shape = (32,),
+
+
+# classes
 class Transfusion(Module):
     @beartype
     def __init__(
         self,
         *,
-        num_text_tokens,
+        num_text_tokens, #total number of text tokens that the model can handle, vocabulary size
         transformer: dict | Transformer,
-        dim_latent: int | tuple[int, ...] | None = None,
+        dim_latent: int | tuple[int, ...] | None = None,  #latent representation dimension
         channel_first_latent = False,
         modality_encoder: Module | tuple[Module, ...] | None = None,
         modality_decoder: Module | tuple[Module, ...] | None = None,
-        modality_token_transform: tuple[ModalityTokenTransform, ...] | ModalityTokenTransform | None = None,
-        modality_default_shape: tuple[int, ...] | tuple[tuple[int, ...], ...] | None = None,
+        modality_token_transform: tuple[ModalityTokenTransform, ...] | ModalityTokenTransform | None = None, #
+        modality_default_shape: tuple[int, ...] | tuple[tuple[int, ...], ...] | None = None, #Preset shapes for each type of modality data
         modality_validate_num_dim: int | tuple[int, ...] | None = None,
         to_modality_shape_fn: Callable | tuple[Callable, ...] = default_to_modality_shape_fn,
         ignore_index = -1,
@@ -1031,14 +1044,14 @@ class Transfusion(Module):
 
         # modality transforms
 
-        modality_token_transform = cast_tuple(modality_token_transform, self.num_modalities)
-        modality_token_transform = [default(transform, identity) for transform in modality_token_transform]
+        modality_token_transform = cast_tuple(modality_token_transform, self.num_modalities)  
+        modality_token_transform = [default(transform, identity) for transform in modality_token_transform]  #if transform function is None, defaults to Identity
         self.modality_token_transform = [Rearrange(maybe_einops_eq) if isinstance(maybe_einops_eq, str) else maybe_einops_eq for maybe_einops_eq in modality_token_transform]
 
         assert len(self.modality_token_transform) == self.num_modalities
 
-        self.latent_to_model_projs = ModuleList([Linear(dim_latent, dim) if dim_latent != dim else nn.Identity() for dim_latent in self.dim_latents])
-       # print("self.latent_to_model_projs:", self.latent_to_model_projs)
+        self.latent_to_model_projs = ModuleList([Linear(dim_latent, dim) if dim_latent != dim else nn.Identity() for dim_latent in self.dim_latents]) #348,512 if unequal then nn is identity projection
+      
         # relative positions
 
         self.rotary_emb = RotaryEmbedding(transformer.dim_head)
@@ -1048,6 +1061,7 @@ class Transfusion(Module):
         effective_num_text_tokens = num_text_tokens + num_text_special_ids + num_modality_special_ids + num_meta_tokens
 
         self.text_embed = nn.Embedding(effective_num_text_tokens, dim)
+        self.max_text_tokens = effective_num_text_tokens
 
         self.to_text_logits = Linear(dim, effective_num_text_tokens, bias = False)
 
@@ -1076,6 +1090,7 @@ class Transfusion(Module):
     def sample(
         self,
         prompt: ModalitySample | None = None,
+        #prompt: A modality sample or None. This can be initial tokens or modalities to start the generation process.
         max_length = 2048,
         text_temperature = 1.5,
         text_min_p = 0.1,
@@ -1090,13 +1105,17 @@ class Transfusion(Module):
 
         init_text_seq = tensor([self.sos_id], device = device)
         modality_sample = [init_text_seq, *default(prompt, [])]
+        # Above default function is used here to handle the prompt parameter. If prompt is provided (not None), it is used directly; otherwise, an empty list [] is used as a default. The * operator unpacks the prompt into the modality_sample list.
 
         # take care of moving to device
 
         modality_sample = tree_map_tensor(modality_sample, lambda t: t.to(device))
         modality_sample = tree_map_tensor(modality_sample, lambda t: rearrange(t, '-> 1') if t.ndim == 0 else t)
+        # The tree_map_tensor function applies the specified lambda function recursively to each tensor within the list or nested structure of modality_sample.
+        # The lambda function lambda t: t.to(device) simply transfers each tensor t to the specified device
+        # Checks if any tensor t has a dimension (ndim) of 0, indicating a scalar tensor, and reshapes it to have a single dimension with one element.
 
-        *_, last_modality_sample = modality_sample
+        *_, last_modality_sample = modality_sample  #unpack and get only the last element of a list using * unpacking
         assert last_modality_sample.dtype in (torch.int, torch.long), 'prompt must be text tokens'
 
         curr_length = 0
@@ -1104,19 +1123,21 @@ class Transfusion(Module):
         modality_shape = None
         num_past_modalities = 0  # starts off with no modalities in output
 
-        text_is_greedy = text_temperature == 0.
+        text_is_greedy = text_temperature == 0.   # it will pick the most likely next token without randomness.
         is_decoding_text = True  # starts off with text decoding, and alternates with modalities depending on [som] tokens detected
 
-        def maybe_transition_to_modality_decoding(seq):
+        def maybe_transition_to_modality_decoding(seq):  # update modality shape
             nonlocal modality_shape
             nonlocal is_decoding_text
             nonlocal curr_modality_id
 
+            # checks the last sampled token to see if it's a start of modality (som) else return
             sampled_token_id = seq[-1]
-
             if sampled_token_id not in self.som_ids:
                 return
 
+            # If the token is a start token, it updates curr_modality_id to reflect the current modality being processed.
+            #Suppose self.som_ids contains [101, 102, 103], where each number represents a special token ID for starting a different modality (e.g., 101 for text, 102 for images, 103 for audio). If the model samples a token with ID 102, the line in question will set curr_modality_id to 1. This indicates that the model should now switch to processing image data according to the logic defined for modality 1.
             curr_modality_id = self.som_ids.index(sampled_token_id)
 
             if exists(fixed_modality_shape):
@@ -1124,12 +1145,10 @@ class Transfusion(Module):
                 return
 
             # get the tokens after the modality meta id
+            maybe_meta_tensor = get_tokens_since_rightmost_id(seq, self.meta_id) # The function searches through the sequence seq to find the last occurrence of the token ID specified by self.meta_id, then returns all tokens that come after this ID in the sequence
 
-            maybe_meta_tensor = get_tokens_since_rightmost_id(seq, self.meta_id)
-
-            default_shape = self.modality_default_shape[curr_modality_id]
-            maybe_modality_validate_num_dim = self.modality_validate_num_dim[curr_modality_id]
-
+            default_shape = self.modality_default_shape[curr_modality_id]  #default shape of current modality
+            maybe_modality_validate_num_dim = self.modality_validate_num_dim[curr_modality_id]   #validate number of dimension in the modality
             meta_str_to_modality_shape = self.to_modality_shape_fn[curr_modality_id]
 
             if maybe_meta_tensor.numel() > 0:
@@ -1137,7 +1156,6 @@ class Transfusion(Module):
                 meta_str = self.decode_chars(meta_tensor)
 
                 if not meta_str.isdigit() or int(meta_str) <= 0:
-
                     assert exists(default_shape), f'invalid modality meta information detected, please set `modality_default_shape` in order to properly fallback'
                     modality_shape = default_shape
                 else:
@@ -1156,14 +1174,14 @@ class Transfusion(Module):
 
         cache = None
 
-        with tqdm(total = max_length) as pbar:
+        with tqdm(total = max_length) as pbar:  #progress bar
 
-            while curr_length <= max_length:
+            while curr_length <= max_length:    
 
                 if is_decoding_text:
                     pbar.set_description('decoding text')
 
-                    *_, seq = modality_sample
+                    *_, seq = modality_sample  #last sample 
 
                     logits, new_kv_cache = self.forward(
                         [modality_sample],
@@ -1176,7 +1194,7 @@ class Transfusion(Module):
                     logits = logits[0][-1]
 
                     if text_is_greedy:
-                        sampled = logits.argmax(dim = -1, keepdim = True)
+                        sampled = logits.argmax(dim = -1, keepdim = True)   # Selects the token with the highest logit (or score)
                     else:
                         logits = min_p_filter(logits, min_p = text_min_p)
 
@@ -1311,31 +1329,21 @@ class Transfusion(Module):
         Float['b n d'] |
         tuple[Float['b n d'], list[Float['...']]]
     ):
-        #print("1311:", text.shape)
+  
         device = self.device
         text = text.to(device)
-
         text, labels = text[:, :-1], text[:, 1:]
-        
-        #print("1317:", text.shape, labels.shape)
 
         # embed text
-
         text = text.masked_fill(text == -1, 0)
         tokens = self.text_embed(text)
-
+ 
         # rotary
-
         seq_len = tokens.shape[-2]
         pos = torch.arange(seq_len, device = device)
-
         rotary_emb = self.rotary_emb(pos)
 
-       # print("1331: text.shape, tokens.shape, pos.shape, rotart_emb.shape", text.shape, tokens.shape, pos.shape, rotary_emb.shape)
-        # text.shape, tokens.shape, pos.shape, rotart_emb.shape torch.Size([2, 1023]) torch.Size([2, 1023, 512]) torch.Size([1023]) torch.Size([1023, 64])
-
         # attention
-
         embed, kv_cache = self.transformer(
             tokens,
             rotary_emb = rotary_emb,
@@ -1343,29 +1351,26 @@ class Transfusion(Module):
             cache = cache,
             return_kv_cache = True
         )
-
         # text unembedding
-
         logits = self.to_text_logits(embed)
-
+        
         if not return_loss:
             if not return_kv_cache:
                 return logits
 
             return logits, kv_cache
-
+   
         loss = F.cross_entropy(
             rearrange(logits, 'b n l -> b l n'),
             labels,
             ignore_index = self.ignore_index
         )
-
         return loss
 
     @typecheck
     def forward_modality(
         self,
-        modalities: Float['b ...'],
+        modalities: Float['b ...'],  # first dimension is Batch
         modality_type: int | None = None,
         return_loss = True
     ) -> Float['']:
@@ -1373,42 +1378,37 @@ class Transfusion(Module):
         if self.num_modalities > 1:
             assert exists(modality_type), '`modality_type` must be explicitly passed in on forward when training on greater than 1 modality'
 
-        modality_type = default(modality_type, 0)
+        modality_type = default(modality_type, 0)  #mod 1 for image
 
-        transform = self.modality_token_transform[modality_type]
-        latent_to_model_fn = self.latent_to_model_projs[modality_type]
+        transform = self.modality_token_transform[modality_type]  #if no input arg given, its identity operation-which is the default case
+        print("1384:",transform, self.latent_to_model_projs[1])
+        latent_to_model_fn = self.latent_to_model_projs[modality_type]  #a nn to change shape: Linear(dim_latent, dim) 
         model_to_flow_pred_fn = self.model_to_latent_preds[modality_type]
-
         tokens = transform(modalities)
 
         # maybe channel first
 
         if self.channel_first_latent:
+            print("1391:",tokens.shape)
             tokens = rearrange(tokens, 'b d ... -> b (...) d')
+            print("1393:",tokens.shape)
 
         # rotary
 
         batch, seq_len, device = tokens.shape[0], tokens.shape[-2], tokens.device
-
-        pos = torch.arange(seq_len, device = device)
-
-        rotary_emb = self.rotary_emb(pos)
+        print(batch,seq_len)
+        pos = torch.arange(seq_len, device = device)  #integers from 0 to seq_len-1
+        rotary_emb = self.rotary_emb(pos) #rotary positional embeddings
 
         # times
-
         times = torch.rand((batch,), device = device)
         padded_times = rearrange(times, 'b -> b 1 1')
-
         noise = torch.randn_like(tokens)
-
-        noised_tokens = padded_times * tokens + (1. - padded_times) * noise
-
+        noised_tokens = padded_times * tokens + (1. - padded_times) * noise  #  linear interpolation between the original tokens and the generated noise, weighted by the padded_times tensor
         flow = tokens - noise
 
         # attention
-        #print("noised tokens:", noised_tokens.shape)
-        noised_tokens = latent_to_model_fn(noised_tokens)
-
+        noised_tokens = latent_to_model_fn(noised_tokens)   # a nn to change dimension latent to transformer dimension 
         embed = self.transformer(
             noised_tokens,
             times = times,
@@ -1454,9 +1454,11 @@ class Transfusion(Module):
         list[Float['b _ _']]
     ):
         is_decoding = exists(decoding_text_or_modality)
-
         is_text_only = torch.is_tensor(modalities) and modalities.dtype in (torch.int, torch.long)
         is_modality_only = torch.is_tensor(modalities) and modalities.dtype == torch.float
+
+        print("1458:",is_text_only, is_modality_only)
+     
 
         # handle ema model being passed in for velocity consistency loss
 
@@ -1483,8 +1485,10 @@ class Transfusion(Module):
 
         if is_modality_only:
             assert return_loss
+            print("1487:",modalities.shape)
             return self.forward_modality(modalities, modality_type = modality_type)
 
+ 
         device = self.device
         tensor_ = partial(tensor, device = device)
 
