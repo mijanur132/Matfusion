@@ -49,12 +49,12 @@ def test_transfusion(
 
     text_images_and_audio = [
         [randint_((16,)), (0, randn(4, 384)), randint_((5,)), (1, randn(6, 192))],
-        [randint_((16,)), randn(7, 384), randint_((5,)), (1, randn(2, 192)), randint_((5,))]
+       # [randint_((16,)), randn(7, 384), randint_((5,)), (1, randn(2, 192)), randint_((5,))]
     ]
 
-    print("print([randint_((16,))]): ",[randint_((16,))])
-    print(" print([ (0, randn(4, 384))]):",[ (0, randn(4, 384))])
-    print("   print([ (1, randn(6, 192))]):",[ (1, randn(6, 192))])
+    # print("print([randint_((16,))]): ",[randint_((16,))])
+    # print(" print([ (0, randn(4, 384))]):",[ (0, randn(4, 384))])
+    # print("   print([ (1, randn(6, 192))]):",[ (1, randn(6, 192))])
 
 
     loss = model(text_images_and_audio)

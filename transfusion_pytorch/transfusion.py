@@ -13,7 +13,7 @@ i, j - sequence (row, col)
 """
 
 import os
-
+import numpy as np
 import math
 from functools import partial
 from typing import NamedTuple, Callable, Literal
@@ -97,6 +97,7 @@ def first(it):
     return it[0]
 
 def prepend(arr, el):
+    #print("arr:",arr)
     arr.insert(0, el)
 
 def join(arr, delimiter = ''):
@@ -664,7 +665,7 @@ class Attention(Module):
         # pre rmsnorm and project to queries, keys, values
 
         x = self.norm(x)
-        print(f" x shape at 667: {x.shape}")
+        #print(f" x shape at 667: {x.shape}")
         q, k, v = self.to_qkv(x)
 
         # handle cache being passed in
@@ -962,35 +963,21 @@ class Transfusion(Module):
 
         if isinstance(transformer, dict):
             transformer = Transformer(**transformer)
-
         self.transformer = transformer
         dim = transformer.dim
-
         self.dim = dim 
-
         # latent and model dimension not the same
-        # make it work for 1 modality for now
-
         dim_latent = default(dim_latent, dim)
        # print("dim_latent:", dim_latent, dim)  #384, 3*64*64, 512
-
         self.dim_latents = cast_tuple(dim_latent)
-
         # whether the latents are accepted to be channel first or channel last
         # if channel first, will be rearrange(c ... -> ... c -> (...) c)
-
         self.channel_first_latent = channel_first_latent
-
         # number of modalities
-
         self.num_modalities = len(self.dim_latents)
-
         # functions for converting the sampled language model meta string back to modality shape of tuple[int, ...]
-
         self.to_modality_shape_fn = cast_tuple(to_modality_shape_fn, self.num_modalities)
-
         # specifying the number of dimensions for the modality, which will be hard validated
-
         self.modality_validate_num_dim = cast_tuple(modality_validate_num_dim, self.num_modalities)
         assert len(self.modality_validate_num_dim) == self.num_modalities
 
@@ -1381,7 +1368,7 @@ class Transfusion(Module):
         modality_type = default(modality_type, 0)  #mod 1 for image
 
         transform = self.modality_token_transform[modality_type]  #if no input arg given, its identity operation-which is the default case
-        print("1384:",transform, self.latent_to_model_projs[1])
+       # print("1384:",transform, self.latent_to_model_projs[1])
         latent_to_model_fn = self.latent_to_model_projs[modality_type]  #a nn to change shape: Linear(dim_latent, dim) 
         model_to_flow_pred_fn = self.model_to_latent_preds[modality_type]
         tokens = transform(modalities)
@@ -1389,14 +1376,20 @@ class Transfusion(Module):
         # maybe channel first
 
         if self.channel_first_latent:
-            print("1391:",tokens.shape)
+           # print("1391:",tokens.shape)
             tokens = rearrange(tokens, 'b d ... -> b (...) d')
-            print("1393:",tokens.shape)
+            #tokens = rearrange(tokens, 'b d ... -> b d (...)')
+            #print("1393:",tokens.shape)
+
+            #b c w h---> b  (128*128)  512
 
         # rotary
+        # b 192 8 8 ---> b (8*8) 192  ---> b 64 192 
+        # b 3  128 128  --> b 128*128 3
+        #  b 3 32*32 ---> b 32*32  128
 
         batch, seq_len, device = tokens.shape[0], tokens.shape[-2], tokens.device
-        print(batch,seq_len)
+       # print(batch,seq_len)
         pos = torch.arange(seq_len, device = device)  #integers from 0 to seq_len-1
         rotary_emb = self.rotary_emb(pos) #rotary positional embeddings
 
@@ -1408,7 +1401,12 @@ class Transfusion(Module):
         flow = tokens - noise
 
         # attention
-        noised_tokens = latent_to_model_fn(noised_tokens)   # a nn to change dimension latent to transformer dimension 
+        noised_tokens = latent_to_model_fn(noised_tokens)   # a nn to change dimension latent to transformer dimension
+        # b 64 192 -----> b () 512 
+        # b 16k 512
+        #b 3 16k ---> b 32*32 128
+
+        #print(noised_tokens.shape)
         embed = self.transformer(
             noised_tokens,
             times = times,
@@ -1457,7 +1455,7 @@ class Transfusion(Module):
         is_text_only = torch.is_tensor(modalities) and modalities.dtype in (torch.int, torch.long)
         is_modality_only = torch.is_tensor(modalities) and modalities.dtype == torch.float
 
-        print("1458:",is_text_only, is_modality_only)
+        #print("1458:",is_text_only, is_modality_only)
      
 
         # handle ema model being passed in for velocity consistency loss
@@ -1485,7 +1483,7 @@ class Transfusion(Module):
 
         if is_modality_only:
             assert return_loss
-            print("1487:",modalities.shape)
+           # print("1487:",modalities.shape)
             return self.forward_modality(modalities, modality_type = modality_type)
 
  
@@ -1520,6 +1518,22 @@ class Transfusion(Module):
             offset = 0
 
             for modality in batch_modalities:
+                # element_shapes = []
+                # for item in modality:
+                #     if isinstance(item, torch.Tensor):
+                #         # If the item is a tensor, append its shape
+                #         element_shapes.append(item.shape)
+                #     elif isinstance(item, tuple):
+                #         # If the item is a tuple, determine the shape or type of each element within the tuple
+                #         tuple_shapes = [x.shape if isinstance(x, torch.Tensor) else type(x).__name__ for x in item]
+                #         element_shapes.append(tuple(tuple_shapes))
+                #     else:
+                #         # If the item is neither a tensor nor a tuple, store its type
+                #         element_shapes.append(type(item).__name__)
+
+                # # Process the shapes or use them as needed within this function
+                # print("Shapes of each element in arr:", element_shapes)
+
                 # if non-text modality detected and not given as a tuple
                 # cast to (int, Tensor) where int is defaulted to type 0 (convenience for one modality)
 
