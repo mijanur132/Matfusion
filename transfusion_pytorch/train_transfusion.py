@@ -36,87 +36,6 @@ from transfusion_pytorch.transfusion import (
 )
 
 
-
-
-
-
-def test_transfusion(
-    cache_kv: bool,
-    use_flex_attn: bool
-):
-    if use_flex_attn and (not exists(flex_attention) or not cuda_available):
-        return pytest.skip()
-
-    text_tokens = 8
-    randint_ = partial(randint, 0, text_tokens)
-
-    model = Transfusion(
-        num_text_tokens = text_tokens,
-        dim_latent = (384, 192), # specify multiple latent dimensions, one for each modality
-        modality_default_shape = ((32,), (64,)),
-        transformer = dict(
-            dim = 512,
-            depth = 2,
-            use_flex_attn = use_flex_attn
-        )
-    )
-
-    if use_flex_attn:
-        model = model.cuda()
-
-    # then for the Tensors of type float, you can pass a tuple[int, Tensor] and specify the modality index in the first position
-
-    text_images_and_audio = [
-        [randint_((16,)), (0, randn(4, 384)), randint_((5,)), (1, randn(6, 192))],
-        [randint_((16,)), randn(7, 384), randint_((5,)), (1, randn(2, 192)), randint_((5,))]
-    ]
-    loss = model(text_images_and_audio)
-    loss.backward()
-
-    # after much training
-    prime = [tensor(model.som_ids[0])]
-    one_multimodal_sample = model.sample(prime, max_length = 128, cache_kv = cache_kv)
-
-
-def test_auto_modality_transform(
-    use_flex_attn: bool
-):
-
-    if use_flex_attn and (not exists(flex_attention) or not cuda_available):
-        return pytest.skip()
-
-    text_tokens = 8
-    randint_ = partial(randint, 0, text_tokens)
-
-    model = Transfusion(
-        num_text_tokens = text_tokens,
-        dim_latent = 384,
-        channel_first_latent = True,
-        modality_default_shape = (32,),
-        transformer = dict(
-            dim = 512,
-            depth = 2,
-            use_flex_attn = use_flex_attn
-        )
-    )
-
-    text_and_images = [
-        [randint_((16,)), randn(384, 2, 2), randint_((8,)), randn(384, 2, 2)],
-        [randint_((16,)), randn(384, 2, 2), randint_((5,)), randn(384, 2, 2), randint_((9,))]
-    ]
-
-    loss = model(text_and_images)
-
-    loss.backward()
-
-    # after much training
-
-    prime = [tensor(model.som_ids[0])]
-
-    one_multimodal_sample = model.sample(prime, max_length = 128)
-
-
-
 class TokenDataset(Dataset):
     def __init__(self, directory):
         self.directory = directory
@@ -263,8 +182,6 @@ def train_modality():
     #dataloader = create_image_dataloader(directory, batch_size=1)
     dataloader, sampler = create_image_dataloader_ddp(directory, batch_size = 12)
 
-
-
     model = Transfusion(
         num_text_tokens = 256,
         dim_latent = (384, 3), #384 for text, 3 for image
@@ -331,11 +248,7 @@ def train_modality():
 
     dist.destroy_process_group()
 
-
-
-
 def train_transfusion():
-  
     x=0  #so that code does not go into slurm_ntasks loop while running without slurm. Remove this before submitting to slurm. 
     if x and "SLURM_NTASKS" in os.environ:
         print("should not come here")
@@ -362,9 +275,7 @@ def train_transfusion():
         print("GPU is not available, using CPU")
 
     use_flex_attn = True
-    # if use_flex_attn and (not exists(flex_attention) or not cuda_available):
-    #     return pytest.skip()
-    
+
     text_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/token_text'
     text_dataloader, text_sampler = create_dataloader_ddp(text_directory, batch_size=1)
     #text_dataloader = create_dataloader(text_directory, batch_size=2)
@@ -373,39 +284,19 @@ def train_transfusion():
     dataloader, sampler = create_image_dataloader_ddp(directory, batch_size = 1)
     model = Transfusion(
         num_text_tokens = 30000,
-        dim_latent = (384,3), # specify multiple latent dimensions, one for each modality
-        channel_first_latent = True,
-        modality_default_shape = ((32,), (32,)),
+        dim_latent = (64), # specify multiple latent dimensions, one for each modality
+        channel_first_latent = False,
+        #modality_default_shape = ((32,), (32,)),
         transformer = dict(
             dim = 512,
             depth = 2,
             use_flex_attn = False
         )
     )
-
     if use_flex_attn: model = model.cuda()
-    text_tokens = 8
-    randint_ = partial(randint, 0, text_tokens)
-
-    # # then for the Tensors of type float, you can pass a tuple[int, Tensor] and specify the modality index in the first position
-    text_images_and_audio = [
-        [randint_((16,)), (0, randn(4, 384)), randint_((5,)), (1, randn(6, 192))],
-        [randint_((16,)), randn(7, 384), randint_((5,)), (1, randn(2, 192)), randint_((5,))]
-    ]
-    #print("text im aud:",text_images_and_audio[0])
     model = model.to(device)
     model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
-    warmup_steps=1
-    #print("396")
-    def lr_lambda(current_step):
-        # if current_step < warmup_steps:
-        #     return 0.001
-        # if current_step > 3:
-        #     return 0.001
-        return 1.0
-
-    optimizer = optim.Adam(model.parameters(), lr=10e-10)  # target lr
-    scheduler = LambdaLR(optimizer, lr_lambda)
+    optimizer = optim.Adam(model.parameters(), lr=10e-6)  # target lr
     num_epochs=100
     global_max = 0
     scaler = GradScaler()
@@ -414,9 +305,9 @@ def train_transfusion():
     if rank==0:
         wandb.init( project="transfusion")
     for epoch in range(num_epochs):
-        #sampler.set_epoch (epoch)
+        sampler.set_epoch (epoch)
         for step, (_tokens,_images) in enumerate(zip(text_dataloader, dataloader)):
-        #for step, _tokens in enumerate(text_dataloader):
+            optimizer.zero_grad()
             glob_step+=1
             zeros_tensor = torch.zeros(1, 1)  #batchsize
             normalized_tokens = torch.cat((zeros_tensor,_tokens), dim = 1)
@@ -424,161 +315,120 @@ def train_transfusion():
             nt = normalized_tokens.squeeze()
             images = _images.to(device)
             im = images.squeeze()
-            print("nt and im shape:", nt.max(), im.max())
-            #inp =[normalized_tokens, images]
-            inp = [[nt, (1, im)]]
+            inp = [[nt, (0, im)]]
             loss = model(inp, return_loss = True)#, modality_type = 1)
             loss = loss/accum_itr   #grad accumulation
             loss.backward()
-            # Clip gradients: parameters, max_norm, norm_type
-            #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0, norm_type=2)  #grad clipping
-            if ((step+1)% accum_itr == 0 or (step+1) == len(dataloader)):
-                optimizer.step()
-                optimizer.zero_grad()
-            if rank == 0 and step%100 == 0:
-                print("epcho step loss lr.............................: ",epoch, glob_step, loss.item(),  optimizer.param_groups[0]['lr'])
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0, norm_type=2)  #grad clipping
+            #if ((step+1)% accum_itr == 0 or (step+1) == len(dataloader)):
+            optimizer.step()
+      
+            if rank == 0 and step%1 == 0:
+                print("epoch step loss lr.............................: ",epoch, glob_step, loss.item(),  optimizer.param_groups[0]['lr'])
             if rank==0:
                 wandb.log({"step": step, "train_loss": loss.item()})
             if torch.isnan(loss):
                 break
-        scheduler.step(epoch)
+
+    dist.destroy_process_group()
+
+
+def train_transfusion_dummy():
+    x=0  #so that code does not go into slurm_ntasks loop while running without slurm. Remove this before submitting to slurm. 
+    if x and "SLURM_NTASKS" in os.environ:
+        print("should not come here")
+        world_size=int(os.environ["SLURM_NTASKS"])
+        local_rank=int(os.environ["SLURM_LOCALID"])
+        rank=int(os.environ["SLURM_PROCID"])
+        address=os.environ["MASTER_ADDR"]
+        port=os.environ["MASTER_PORT"]
+        print(f"world size and rank:{world_size}, {rank}")
+    else:
+        world_size= torch.cuda.device_count()
+        rank=int(os.getenv('RANK', 0))
+        local_rank= int(os.getenv('LOCAL_RANK', 0))
+        address="127.0.0.1"
+        port=29500
+        print(f"world size and rank:{world_size}, {rank}, {local_rank}")
+    dist.init_process_group(backend="nccl", init_method=f"tcp://{address}:{port}", rank=rank, world_size=world_size)
+    torch.cuda.set_device(local_rank)
+    device= torch.device('cuda', local_rank)
+    print(f"Process {rank} using device: {device}")
+    if device.type == 'cuda':
+        print("GPU is available")
+    else:
+        print("GPU is not available, using CPU")
+
+    use_flex_attn = True
+
+    text_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/token_text'
+    text_dataloader, text_sampler = create_dataloader_ddp(text_directory, batch_size=1)
+    #text_dataloader = create_dataloader(text_directory, batch_size=2)
+
+    directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/numpy_files/train'
+    dataloader, sampler = create_image_dataloader_ddp(directory, batch_size = 1)
+    model = Transfusion(
+        num_text_tokens = 6,
+        dim_latent = (8), # specify multiple latent dimensions, one for each modality
+        #channel_first_latent = True,
+        #modality_default_shape = ((32, 32)),
+        transformer = dict(
+            dim = 16,
+            depth = 1,
+            use_flex_attn = False
+        )
+    )
+    if use_flex_attn: model = model.cuda()
+    model = model.to(device)
+    model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
+    optimizer = optim.Adam(model.parameters(), lr=10e-6)  # target lr
+    num_epochs=100
+    global_max = 0
+    scaler = GradScaler()
+    glob_step = 0
+    accum_itr = 1
+    text_tokens = 8
+    randint_ = partial(randint, 0, text_tokens)
+
+
+    if rank==0:
+        wandb.init( project="transfusion")
+    for epoch in range(num_epochs):
+        sampler.set_epoch (epoch)
+        for step, (_tokens,_images) in enumerate(zip(text_dataloader, dataloader)):
+            optimizer.zero_grad()
+            glob_step+=1
+            zeros_tensor = torch.zeros(1, 1)  #batchsize
+            normalized_tokens = torch.cat((zeros_tensor,_tokens), dim = 1)
+            normalized_tokens = normalized_tokens.cuda().long()
+            nt = normalized_tokens.squeeze()
+            images = _images.to(device)
+            im = images.squeeze()
+            inp = [[nt, (1, im)]]
+        #     inp = [[randint_((16,)), (0, randn(4, 384)), randint_((8,)), (1, randn(6, 192))],
+        # [randint_((16,)), randn(7, 384), randint_((5,)), (1, randn(2, 192)), randint_((9,))]]
+            inp = [[randint_((8,)), (0, randn(2, 8))]]
+            loss = model(inp, return_loss = True)#, modality_type = 1)
+            loss = loss/accum_itr   #grad accumulation
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0, norm_type=2)  #grad clipping
+            #if ((step+1)% accum_itr == 0 or (step+1) == len(dataloader)):
+            optimizer.step()
+      
+            if rank == 0 and step%1 == 0:
+                print("epoch step loss lr.............................: ",epoch, glob_step, loss.item(),  optimizer.param_groups[0]['lr'])
+            if rank==0:
+                wandb.log({"step": step, "train_loss": loss.item()})
+            if torch.isnan(loss):
+                break
 
     dist.destroy_process_group()
 
 
 
 
-
-def test_modality_only():
-
-    model = Transfusion(
-        num_text_tokens = 256,
-        dim_latent = (384, 192),
-        #dim_latent = (384, 3), #second dimension in images dimension below is the second one here
-        channel_first_latent = True,
-        modality_default_shape = (32,),
-        transformer = dict(
-            dim = 512,
-            depth = 2,
-            use_flex_attn = False
-        )
-    )
-    images = randn(2, 192, 8, 8)
-    #images = randn(2, 3, 128, 128)
-    loss = model(images, return_loss = True, modality_type = 1)
-
-    loss.backward()
-
-
-def test_text_image_end_to_end(
-    custom_time_fn: bool
-):
-    mock_vae_encoder = nn.Conv2d(3, 384, 3, padding = 1)
-    mock_vae_decoder = nn.Conv2d(384, 3, 3, padding = 1)
-
-    model = Transfusion(
-        num_text_tokens = 4,
-        dim_latent = 384,
-        channel_first_latent = True,
-        modality_default_shape = ((4, 4)),
-        modality_encoder = mock_vae_encoder,
-        modality_decoder = mock_vae_decoder,
-        transformer = dict(
-            dim = 512,
-            depth = 8
-        )
-    )
-
-    text_and_images = [
-        [
-            randint(0, 4, (16,)),
-            randn(3, 8, 8),
-            randint(0, 4, (8,)),
-            randn(3, 7, 7)
-        ],
-        [
-            randint(0, 4, (16,)),
-            randn(3, 8, 5),
-            randint(0, 4, (5,)),
-            randn(3, 2, 16),
-            randint(0, 4, (9,))
-        ]
-    ]
-
-    # allow researchers to experiment with different time distributions across multiple modalities in a sample
-
-    def modality_length_to_times(modality_length):
-        has_modality = modality_length > 0
-        return torch.where(has_modality, torch.ones_like(modality_length), 0.)
-
-    time_fn = modality_length_to_times if custom_time_fn else None
-
-    # forward
-
-    loss = model(
-        text_and_images,
-        modality_length_to_times_fn = time_fn
-    )
-
-    loss.backward()
-
-    # after much training
-
-    one_multimodal_sample = model.sample()
-
-def test_velocity_consistency():
-    mock_encoder = nn.Conv2d(3, 384, 3, padding = 1)
-    mock_decoder = nn.Conv2d(384, 3, 3, padding = 1)
-
-    model = Transfusion(
-        num_text_tokens = 12,
-        dim_latent = 384,
-        channel_first_latent = True,
-        modality_default_shape = ((4, 4)),
-        modality_validate_num_dim = 2,
-        modality_encoder = mock_encoder,
-        modality_decoder = mock_decoder,
-        transformer = dict(
-            dim = 512,
-            depth = 1
-        )
-    )
-
-    ema_model = deepcopy(model)
-
-    text_and_images = [
-        [
-            randint(0, 12, (16,)),
-            randn(3, 8, 8),
-            randint(0, 12, (8,)),
-            randn(3, 7, 7)
-        ],
-        [
-            randint(0, 12, (16,)),
-            randn(3, 8, 5),
-            randint(0, 12, (5,)),
-            randn(3, 2, 16),
-            randint(0, 12, (9,))
-        ]
-    ]
-
-    def modality_length_to_times(modality_length):
-        has_modality = modality_length > 0
-        return torch.where(has_modality, torch.ones_like(modality_length), 0.)
-
-    loss, breakdown = model(
-        text_and_images,
-        velocity_consistency_ema_model = ema_model,
-        modality_length_to_times_fn = modality_length_to_times,
-        return_breakdown = True
-    )
-
-    loss.backward()
-
-    assert exists(breakdown.velocity)
-
-
 if __name__=="__main__":
     #train()
     #train_modality()
     train_transfusion()
+    #train_transfusion_dummy()

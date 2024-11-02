@@ -44,6 +44,7 @@ from jaxtyping import jaxtyped
 from beartype import beartype
 from beartype.door import is_bearable
 
+rank = int(os.getenv('RANK', -1))
 
 
 class TorchTyping:
@@ -300,33 +301,38 @@ def derive_rotary_positions_from_modality_positions(
 
 def embed_modality_tokens(
     seq_len: int,
-    dim: int,
+    dim: int,  #latent dim corresponding the below modality_id
     modality_tokens: list[list[Float['_ d']]],
     modalities: Int['b m 3'],
     modality_id: int
 ) -> Float['b n d']:
 
     batch, device = modalities.shape[0], modalities.device
-
     output = torch.zeros((batch, seq_len, dim), device = device)
 
     for batch_ind, (one_modality, one_modality_token) in enumerate(zip(modalities, modality_tokens)):
+        if rank==0: print(f"one_modality, one_modality_token:{batch_ind, one_modality, one_modality_token}")
         for (type, offset, length), batch_modality_token in zip(one_modality, one_modality_token):
+            if rank==0: print(f"(type, offset, length), batch_modality_token: {(type, offset, length), batch_modality_token } ")
 
             if modality_id != type or length <= 0:
+                if rank==0: print(f"modality_id != type or length <= 0:{modality_id, type, length}")
                 continue
 
             modality_shape = batch_modality_token.shape
+            if rank==0: print(f"mod shape", modality_shape)  #4,384-->original image data
 
             assert length == modality_shape[0], f'received a modality of shape {modality_shape} but sequence length in modalities info is {length}'
             assert dim == modality_shape[1], f'received modality [{modality_id}] with shape {modality_shape} but expected dimension of {dim}'
+            
+            if rank==0: print(f"op before:", output.sum(), output[batch_ind, offset:offset+length])
 
             output[batch_ind, offset:(offset + length)] = batch_modality_token
+            if rank==0: print(f"op after:", output.sum(), output[batch_ind, offset:offset+length])
 
     return output
 
 # functions for managing modality token mask
-
 @typecheck
 def modality_positions_to_is_modality_mask(
     seq_len: int,
@@ -341,22 +347,40 @@ def modality_positions_to_is_modality_mask(
     if exists(offset):
         offset = F.pad(offset, (1, 0))
         modalities = modalities + offset.to(modalities)
-
+ 
     seq = torch.arange(seq_len, device = device)
     type_seq = torch.arange(num_modalities, device = device)
+    modality_types = modalities[..., 0]  #get the last dimension value in this case mod type
 
-    modality_types = modalities[..., 0]
 
-    left, right = modalities[..., 1:].cumsum(dim = -1).unbind(dim = -1)
+    left, right = modalities[..., 1:].cumsum(dim = -1).unbind(dim = -1) #the start and end positions of each modality span within the sequence
 
     is_instance_for_type = einx.equal('b m, t -> b t m', modality_types, type_seq)
-
-    is_modality_along_seq = (
+#above tensor provides a map (t m) where each element is True if the modality type at position m matches the type at position t
+#above creating a mask to identify where each type of modality is present.
+# Is Instance For Type:
+#  tensor([[ True, False]]); this instance if of type 0 modality
+    is_modality_along_seq = (  #chck for overlap
         einx.greater_equal('i, b m -> b m i', seq, left) &
         einx.less('j, b m -> b m j', seq, right)
     )
 
+# Is Modality Along Sequence:
+#  tensor([[False, False, False,  True,  True,  True, False, False, False, False]])
+# Positions 3, 4, and 5 are occupied by text, and 5, 6, and 7 by an image (note that index 5 is shared).
+    if rank==0:
+        print("modalities:",modalities, modalities.shape, num_modalities,offset)
+        print("seq:", seq)
+        print("type_seq:",type_seq)
+        print("mod types:", modality_types)
+        print("is_instance_for_type:", is_instance_for_type)
+        print("is_modality_along_seq:", is_modality_along_seq)
+        a=einx.logical_and('b t m, b m n -> b t m n', is_instance_for_type, is_modality_along_seq)
+        print("return:",a )
     return einx.logical_and('b t m, b m n -> b t m n', is_instance_for_type, is_modality_along_seq)
+#above tensor effectively shows where each type of modality correctly appears within the sequence. 
+# The dimensions represent [batch size, modality type, sequence length], 
+# providing a detailed map of the presence and position of each modality type across the sequence.
 
 @typecheck
 def naive_attn_mask(
@@ -924,14 +948,6 @@ class Transformer(Module):
 
         return out, torch.stack(new_cache)
 
-
-    # model = Transfusion(
-    #     num_text_tokens = 30000,
-    #     dim_latent = 384,
-    #     channel_first_latent = True,
-    #     modality_default_shape = (32,),
-
-
 # classes
 class Transfusion(Module):
     @beartype
@@ -991,6 +1007,8 @@ class Transfusion(Module):
 
         assert len(self.modality_encoder) == self.num_modalities
         assert len(self.modality_decoder) == self.num_modalities
+
+        print(modality_encoder)
 
         # default token lengths for respective modality
         # fallback if the language model does not come up with valid dimensions
@@ -1367,7 +1385,7 @@ class Transfusion(Module):
 
         modality_type = default(modality_type, 0)  #mod 1 for image
 
-        transform = self.modality_token_transform[modality_type]  #if no input arg given, its identity operation-which is the default case
+        transform = self.modality_token_transform[modality_type]  #Linear(dim_latent, dim)  dim is 512 xformer dimension
        # print("1384:",transform, self.latent_to_model_projs[1])
         latent_to_model_fn = self.latent_to_model_projs[modality_type]  #a nn to change shape: Linear(dim_latent, dim) 
         model_to_flow_pred_fn = self.model_to_latent_preds[modality_type]
@@ -1454,10 +1472,6 @@ class Transfusion(Module):
         is_decoding = exists(decoding_text_or_modality)
         is_text_only = torch.is_tensor(modalities) and modalities.dtype in (torch.int, torch.long)
         is_modality_only = torch.is_tensor(modalities) and modalities.dtype == torch.float
-
-        #print("1458:",is_text_only, is_modality_only)
-     
-
         # handle ema model being passed in for velocity consistency loss
 
         if isinstance(velocity_consistency_ema_model, EMA):
@@ -1465,9 +1479,6 @@ class Transfusion(Module):
             velocity_consistency_ema_model = velocity_consistency_ema_model.ema_model
 
         need_velocity_matching = not is_decoding and exists(velocity_consistency_ema_model)
-
-        # return loss
-
         return_loss &= not (return_embed or is_decoding)
 
         if is_text_only:
@@ -1486,31 +1497,27 @@ class Transfusion(Module):
            # print("1487:",modalities.shape)
             return self.forward_modality(modalities, modality_type = modality_type)
 
- 
         device = self.device
         tensor_ = partial(tensor, device = device)
 
         # save a copy for ema model for velocity matching
-
         if need_velocity_matching:
             velocity_modalities = modalities
-
             if isinstance(velocity_modalities, list):
                 velocity_modalities = [modality.copy() for modality in velocity_modalities]
 
         # add "sentence" start and end tokens when training
-
         if return_loss or need_velocity_matching:
             for modality in modalities:
                 prepend(modality, tensor_([self.sos_id]))
                 modality.append(tensor_([self.eos_id]))
 
         # process list of text and modalities interspersed with one another
-
         modality_positions = []
         modality_tokens = []
         text = []
-
+        if rank==0:
+            print("modalities all:", self.sos_id, self.eos_id, modalities)  #[ tensor[sos], text_tensor, img_tensor, tesor[eos]]
         for batch_modalities in modalities:
             batch_modality_positions = []
             batch_modality_tokens = []
@@ -1518,86 +1525,68 @@ class Transfusion(Module):
             offset = 0
 
             for modality in batch_modalities:
-                # element_shapes = []
-                # for item in modality:
-                #     if isinstance(item, torch.Tensor):
-                #         # If the item is a tensor, append its shape
-                #         element_shapes.append(item.shape)
-                #     elif isinstance(item, tuple):
-                #         # If the item is a tuple, determine the shape or type of each element within the tuple
-                #         tuple_shapes = [x.shape if isinstance(x, torch.Tensor) else type(x).__name__ for x in item]
-                #         element_shapes.append(tuple(tuple_shapes))
-                #     else:
-                #         # If the item is neither a tensor nor a tuple, store its type
-                #         element_shapes.append(type(item).__name__)
-
-                # # Process the shapes or use them as needed within this function
-                # print("Shapes of each element in arr:", element_shapes)
-
-                # if non-text modality detected and not given as a tuple
-                # cast to (int, Tensor) where int is defaulted to type 0 (convenience for one modality)
-
                 if torch.is_tensor(modality) and modality.dtype == torch.float:
                     modality = (0, modality)
 
                 is_text = not isinstance(modality, tuple)
-
+                if rank==0:
+                    if is_text:
+                        print("text modality:", modality.shape, modality)
+                    else:
+                        print("non text modality:", modality[1].shape, modality)
+       
                 if is_text:
                     modality_tensor = modality
                 else:
                     modality_type, modality_tensor = modality
 
                     if not is_decoding:
-                        modality_transform = self.modality_token_transform[modality_type]
-                        maybe_modality_encode = self.modality_encoder[modality_type]
-
+                        modality_transform = self.modality_token_transform[modality_type] #Linear(dim_latent, dim), dim is xformer dim
+                        maybe_modality_encode = self.modality_encoder[modality_type] #None
                         modality_tensor = modality_transform(modality_tensor)
-
                         if exists(maybe_modality_encode):
-
                             with torch.no_grad():
                                 maybe_modality_encode.eval()
                                 modality_tensor = maybe_modality_encode(modality_tensor).detach()
 
                         if self.channel_first_latent:
                             modality_tensor = rearrange(modality_tensor, 'd ... -> ... d')
-
+                    if rank==0: print("self.dim_latents[modality_type]:", self.dim_latents[modality_type],modality_tensor.shape[-1])
                     assert 0 <= modality_type < self.num_modalities, f'received a modality index that is out of range. only {self.num_modalities} modalities specified'
                     assert self.dim_latents[modality_type] == modality_tensor.shape[-1], f'mismatch for modality latent dimension - expected {self.dim_latents[modality_type]} but received {modality_tensor.shape[-1]} - modality shape is {tuple(modality_tensor.shape)}, perhaps you need to set `channel_first_latent = True`'
 
                 # auto move modality tensor to device of model
 
                 modality_tensor = modality_tensor.to(device)
-
-                if modality_tensor.dtype in (torch.int, torch.long) and modality_tensor.ndim == 0:
+                if rank==0: print("modality_tensor:", modality_tensor)
+    
+                if modality_tensor.dtype in (torch.int, torch.long) and modality_tensor.ndim == 0: # does not enter make ndim=1,
                     modality_tensor = rearrange(modality_tensor, '-> 1')
-
-                # handle text
 
                 if is_text:
                     assert modality_tensor.ndim == 1
                     text_length = modality_tensor.shape[0]
-
                     batch_text.append(modality_tensor)
+                    if rank==0: print(f"text offset:", offset)
                     offset += text_length
                     continue
 
+                # Rest of the code of this loop deals with image data only  ###########################################
+                if rank==0: print("text should not come here")
                 # otherwise handle a modality
-
                 modality_shape_tuple = tuple(modality_tensor.shape[:-1])
                 modality_length = math.prod(modality_shape_tuple)
-
-                text_tensor = torch.full((modality_length,), -1, device = device) # text is all -1 here, so text labels are not learned on
-
+                if rank==0: print("modality_shape_tuple:",modality_shape_tuple)  #64*64
+                text_tensor = torch.full((modality_length,), -1, device = device) # text is all -1 here, placeholder
                 # add the [som] and [eom] tokens for the modality type
-
                 som_id, eom_id = self.som_ids[modality_type], self.eom_ids[modality_type]
 
                 # start by just storing the token length of the modality
 
                 modality_shape_str = join([*map(str, modality_shape_tuple)], ',')
                 modality_meta_info = self.char_tokenizer(modality_shape_str, device = device)
-
+                if rank==0:
+                    print("text_tensor, som, eom, meta:",text_tensor, som_id, eom_id, modality_meta_info)
                 text_tensor = torch.cat((
                     tensor_([self.meta_id]),
                     modality_meta_info,
@@ -1605,31 +1594,33 @@ class Transfusion(Module):
                     text_tensor,
                     tensor_([eom_id])
                 ))
-
+                if rank==0: print("text tensor2:", text_tensor)
                 batch_text.append(text_tensor)
                 modality_tensor = rearrange(modality_tensor, '... d -> (...) d')
-
+               # if rank==0: print("modality tensor", modality_tensor)
                 batch_modality_tokens.append(modality_tensor)
-
+               # if rank==0: print("batch_modality_tokens", batch_modality_tokens)
                 batch_modality_positions.append((modality_type, offset + 1, modality_length)) # offset + 1 due to extra [som] token
-
+                if rank==0: print("batch_modality_positions:", batch_modality_positions)
                 offset += modality_length + 2 + len(modality_meta_info) + 1 # +2 due to [som] and [eom] - then account for meta start id and modality shape information (or eventually any meta information about modality)
+                if rank==0: print("offset:", offset)
 
             text.append(torch.cat(batch_text))
             modality_tokens.append(batch_modality_tokens)
             modality_positions.append(batch_modality_positions)
 
+#### everything is text from here......
+
         text = pad_sequence(text, padding_value = -1)
 
-        # if returning loss, split text for next token prediction
+        if rank==0: print("text:", text)
 
+        # if returning loss, split text for next token prediction
         if return_loss:
             text, text_labels = text[:, :-1], text[:, 1:]
 
         # derive is_modality mask for flow on the right tokens + flow loss
-
         batch, seq_len, device = *text.shape, text.device
-
         assert len(modality_positions) == batch
 
         if isinstance(modality_positions, list):
@@ -1646,12 +1637,16 @@ class Transfusion(Module):
         # embed the list of modality tokens into a sequence of Float['b n d'] at right offsets and lengths as dictated by modalities info tensor
 
         if torch.is_tensor(modality_tokens):
-            modality_tokens = [modality_tokens]
+            modality_tokens = [modality_tokens] #raw image data
 
         # embed the modality tokens into one Tensor if not given as one
 
         if isinstance(modality_tokens, list) and isinstance(first(modality_tokens), list): # detect list[list[tensor]]
-            modality_tokens = [embed_modality_tokens(seq_len, dim_latent, modality_tokens, modality_positions, modality_id) for modality_id, dim_latent in enumerate(self.dim_latents)]
+            if rank==0: print("modality_tokens before embedd:", modality_tokens)
+            modality_tokens = [embed_modality_tokens(seq_len, dim_latent, modality_tokens, modality_positions, modality_id) for modality_id, dim_latent in enumerate(self.dim_latents)] #embeds image into latent dimension
+        
+            if rank==0:
+                print("modality_tokens after embedd:", modality_tokens[0].shape, modality_tokens[0].sum())
 
         # sort the modalities tensor and sanitize, readying for noising of modalities
 
@@ -1667,13 +1662,19 @@ class Transfusion(Module):
 
         text = text.masked_fill(text == -1, 0)
 
-        text_tokens = self.text_embed(text)
+        if rank==0:
+            print("text before embedd:",text)
+
+        text_tokens = self.text_embed(text)  #nn.Embedding(effective_num_text_tokens, xformer_dim)
+
+        if rank==0:
+            print("text, texttokens:", text.shape, text_tokens.shape) #(1,25), (1,25,512)
+            print(text_tokens)
 
         # noise the modality tokens
 
         if not exists(times):
             modality_length_to_times_fn = default(default_modality_length_to_time_fn, modality_length_to_times_fn)
-
             if exists(modality_length_to_times_fn):
                 times = modality_length_to_times_fn(modality_positions[..., -1])
 
@@ -1684,8 +1685,9 @@ class Transfusion(Module):
             flows = []
 
             for modality_id, one_modality_tokens in enumerate(modality_tokens):
+                if rank==0:
+                    print("one md tok:",modality_id, one_modality_tokens, one_modality_tokens.shape, one_modality_tokens.sum())
                 noise = torch.randn_like(one_modality_tokens)
-
                 one_times = times_per_token[:, modality_id]
                 padded_times = rearrange(one_times, 'b n -> b n 1')
 
@@ -1704,25 +1706,22 @@ class Transfusion(Module):
 
         # project the modality tokens to model
 
-        modality_tokens = [fn(one_modality_tokens) for fn, one_modality_tokens in zip(self.latent_to_model_projs, modality_tokens)]
-
+        if rank==0: print(f"1705: modality_tokens before projection:", modality_tokens, modality_tokens[0].shape)
+        modality_tokens = [fn(one_modality_tokens) for fn, one_modality_tokens in zip(self.latent_to_model_projs, modality_tokens)]  #1*25*384-->25*512
         modality_tokens = sum(modality_tokens)
+        if rank==0: print(f"1708: modality_tokens after projection:", modality_tokens, modality_tokens[0].shape)
 
         # intersperse the modalities with the text for the joint transformer + flow system
-
-        tokens = einx.where('b n, b n d, b n d', is_any_modality, modality_tokens, text_tokens)
+        tokens = einx.where('b n, b n d, b n d', is_any_modality, modality_tokens, text_tokens) #choose from any of the text/modality in each token position
+        if rank==0: print("final_tokens:", tokens)
 
         # derive rotary positions
-
         rotary_positions = derive_rotary_positions_from_modality_positions(seq_len, modality_positions)
-
         rotary_emb = self.rotary_emb(rotary_positions)
         rotary_emb = rearrange(rotary_emb, 'b n d -> b 1 n d')
 
         # take care of cache
-
         is_any_modality_when_decoding = None
-
         if exists(cache):
             assert exists(decoding_text_or_modality)
             is_any_modality_when_decoding = decoding_text_or_modality == 'modality'
@@ -1743,6 +1742,9 @@ class Transfusion(Module):
             cache = cache,
             return_kv_cache = True
         )
+
+        # if rank == 0:
+        #     print("is nan embed, cache:",torch.isnan(embed).any(),torch.isnan(kv_cache).any())
 
         # early return for embedding for decoding modality
 
@@ -1765,6 +1767,20 @@ class Transfusion(Module):
         # flow loss
 
         pred_flows = [fn(embed) for fn in self.model_to_latent_preds]
+        #print("is nan embed flow/mod loss:", torch.isnan(embed).any().item(), torch.isnan(pred_flows).any().item())
+
+        #****
+        embed_has_nan = torch.isnan(embed).any().item() if torch.is_tensor(embed) else 'embed is not a tensor'
+
+        # Check each tensor in pred_flows for NaN values and handle the case where pred_flows is not a list of tensors
+        if isinstance(pred_flows, list) and all(torch.is_tensor(x) for x in pred_flows):
+            pred_flows_has_nan = any(torch.isnan(x).any().item() for x in pred_flows)
+        else:
+            pred_flows_has_nan = 'pred_flows is not a list of tensors'
+        # if rank == 0:
+        #     print("is nan embed flow/mod loss:", embed_has_nan, pred_flows_has_nan)
+
+        #****
 
         # early return for velocity consistency ema model
 
@@ -1772,13 +1788,10 @@ class Transfusion(Module):
             return pred_flows
 
         # calculate total tokens for weighing the loss
-
         total_tokens = (text_labels != self.ignore_index).sum()
 
         # text autoregressive loss
-
         text_labels = text_labels.masked_fill(is_any_modality, self.ignore_index)
-
         text_loss = F.cross_entropy(
             rearrange(text_logits, 'b n l -> b l n'),
             text_labels,
@@ -1786,9 +1799,8 @@ class Transfusion(Module):
         )
 
         text_loss_weight = (text_labels != self.ignore_index).sum() / total_tokens
-
         # calculate flow losses
-
+     
         flow_losses = []
         modality_loss_weights = []
 
@@ -1800,24 +1812,34 @@ class Transfusion(Module):
                 reduction = 'none'
             )
 
-            is_one_modality = reduce(is_one_modality, 'b m n -> b n', 'any')
 
-            flow_loss = flow_loss[is_one_modality].mean()
+            is_one_modality = reduce(is_one_modality, 'b m n -> b n', 'any') #1*4618
+            a= flow_loss[is_one_modality] 
+            #flow_loss = flow_loss[is_one_modality].mean() # is_one_moda is al False tensor, a is empty tensor, so NaN value
+            #print("shapes:", flow_loss.shape, is_one_modality.shape, is_one_modality.sum(), a.sum(), a.mean())
+            if a.nelement() == 0:
+                flow_loss  = torch.tensor(0.0, device=a.device)
+            else:
+                flow_loss  = a.mean()
+
 
             modality_loss_weight = is_one_modality.sum() / total_tokens
-
+   
             modality_loss_weights.append(modality_loss_weight)
-
             flow_losses.append(flow_loss)
 
         modality_loss_weights = torch.stack(modality_loss_weights)
 
         # only the token positions that are not modalities have autoregressive loss
+        a = torch.stack(flow_losses) 
+        b = modality_loss_weights
 
         total_loss = (
             text_loss * text_loss_weight +
             (torch.stack(flow_losses) * modality_loss_weights).sum() * self.flow_loss_weight
         )
+
+       # print("total loss, a:",  a)
 
         # whether to handle velocity consistency
         # for straightening the flow, from consistency flow matching paper https://arxiv.org/abs/2407.02398
@@ -1856,9 +1878,11 @@ class Transfusion(Module):
                 (torch.stack(velocity_match_losses) * modality_loss_weights).sum() * self.velocity_consistency_loss_weight
             )
 
-        # return total loss if no breakdown needed
+            #print("modality  and velocity loss:", torch.isnan(torch.tensor(flow_losses)).any(), torch.isnan(velocity_match_losses).any())
 
+        # return total loss if no breakdown needed
+  
         if not return_breakdown:
             return total_loss
-
+    
         return total_loss, LossBreakdown(total_loss, text_loss, flow_losses, velocity_match_losses)
