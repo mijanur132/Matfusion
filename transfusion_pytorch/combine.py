@@ -4,52 +4,65 @@ import json
 import torch
 
 # Paths to the folders
-folder_B = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/token_json/'
-folder_A = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/numpy_files/dev/'
+folder_A = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/token_json/'
+folder_B = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/numpy_files/combined/'
 output_folder = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/comb_json_npy'
 os.makedirs(output_folder, exist_ok=True)
 
+# Obtain SLURM environment variables
+task_id = int(os.getenv('SLURM_PROCID', 0))
+num_tasks = int(os.getenv('SLURM_NTASKS', 1))
+
 # Function to extract the mp number from the file name
 def extract_mp_number(filename):
-    # For .cif files
+    #print(filename)
     if filename.endswith('.json'):
-        return filename.split('.')[0].split('-')[1]
-    # For .npy files
+        a=filename.split('.')[0].split('-')[1]
+       #print(a)
+        return a
     elif filename.endswith('.npy'):
-        return filename.split('_')[1].split('-')[1]
+        b=filename.split('_')[1].split('-')[1]
+        #print(b)
+        return b
     return None
 
-# Iterate through all files in folder B
+a_files_dict = {}  #jsons..
+for filename_a in os.listdir(folder_A):
+    mp_number = extract_mp_number(filename_a)
+    a_files_dict[mp_number] = filename_a
+print("dict 1 done..", len(a_files_dict))
+b_files_dict = {}  #numpys
 for filename_b in os.listdir(folder_B):
-    if filename_b.endswith('.json'):
-        mp_number = extract_mp_number(filename_b)
-        matching_files = []
-        
-        # Look for files in folder A that contain the same mp_number
-        for filename_a in os.listdir(folder_A):
-            if filename_a.endswith('.npy') and extract_mp_number(filename_a) == mp_number:
-                matching_files.append(filename_a)
-        
-        # If matching files are found, read and combine the data
-        if matching_files:
-            filepath_b=f"{folder_B}{filename_b}"
-            with open(filepath_b, 'r') as file:
-                data = json.load(file)
-                tokens = data['input_ids'][0]
-                #tokens_tensor = torch.tensor(tokens, dtype=torch.float32)
-            
-            for file_a in matching_files:
-                print(filename_b, file_a)
-                filepath_a=f"{folder_A}{file_a}"
-                npy_data = np.load(filepath_a)
-                combined_data = (tokens, npy_data)
+    mp_number = extract_mp_number(filename_b)
+    b_files_dict.setdefault(mp_number, []).append(filename_b)
 
-                # Save combined data to a new file
-                output_filename = f'{output_folder}/combined{file_a[8:-4]}.pt'
-                print(output_filename)
-                torch.save( combined_data, output_filename)
-        else: 
-            print(f"No matching files found for: {filename_b}")
+total_length = sum(len(lst) for lst in b_files_dict.values())
+print("dict 2 done..", total_length)
+x=0
+y=0
+z=0
 
+for i, mp_number in enumerate(a_files_dict.keys()): #json
+    # if i % num_tasks != task_id:
+    #     continue
+# for mp_number in a_files_dict:  #for each json
+    x+=1
+    print("total_file A:",x)
+    if mp_number in b_files_dict:  
+        y+=1
+        filename_a = a_files_dict[mp_number]
+        filepath_a = os.path.join(folder_A, filename_a)
+        with open(filepath_a, 'r') as file:
+            data = json.load(file)
+            tokens = data['input_ids'][0]
 
-print("Processing complete. Combined files saved to:", output_folder)
+        for filename_b in b_files_dict[mp_number]:
+            filepath_b = os.path.join(folder_B, filename_b)
+            npy_data = np.load(filepath_b)
+            combined_data = (tokens, npy_data)
+            output_filename = os.path.join(output_folder, f'combined{filename_b[8:-4]}.pt')
+            print(f"saved{output_filename}  {y}")
+            torch.save(combined_data, output_filename)
+    else:
+        z+=1
+        print("no match:", z)

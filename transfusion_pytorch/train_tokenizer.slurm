@@ -1,7 +1,22 @@
 #!/bin/bash
+#SBATCH -A STF218
+#SBATCH -J tokenize
+#SBATCH -o slurm/%j.out
+#SBATCH -e slurm/%j.err
+#SBATCH -N 1
+#SBATCH -t 01:59:00
+#SBATCH -S 0
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=1
+#SBATCH -C nvme
+#BATCH -q debug
+
+
+# module purge
 module load PrgEnv-gnu
 module load gcc/11.2.0
 module load amd-mixed/6.0.0
+#module load craype-accel-amd-gfx90a
 module load ninja
 module load miniforge3
 
@@ -13,11 +28,18 @@ export TORCH_HOME=$PWD/cache
 
 source /autofs/nccs-svm1_sw/frontier/python/3.10/miniforge3/23.11.0/etc/profile.d/conda.sh
 conda activate /ccs/home/palashmr/packages/miniconda/pyt_env/transfusion
+# Print Python executable and version
+# which python
+# python -V
 
+# conda env list
+# List installed packages to check if TensorFlow is present
+#python -m pip list
+# python -c "import wandb; wandb.init()"
 
-export PATH=/ccs/home/palashmr/packages/miniconda/pyt_env/transfusion/bin:$PATH
+#export PATH=/ccs/home/palashmr/packages/miniconda/pyt_env/transfusion/bin:$PATH
 #export PATH=/lustre/orion/stf218/world-shared/palashmr/py310_frontier/bin/wandb:$PATH
-#export PATH=/ccs/home/palashmr/packages/miniconda/pyt_env/score-mri-amd/bin:$PATH
+export PATH=/ccs/home/palashmr/packages/miniconda/pyt_env/score-mri-amd/bin:$PATH
 
 
 export LD_PRELOAD="/usr/lib64/libcrypto.so /usr/lib64/libssh.so.4 /usr/lib64/libssl.so.1.1"
@@ -47,7 +69,7 @@ rm -rf ${MIOPEN_USER_DB_PATH}
 mkdir -p ${MIOPEN_USER_DB_PATH}
 
 #export CUDA_VISIBLE_DEVICES=0
-#export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 
 export MASTER_ADDR=127.0.0.1
 export MASTER_PORT=29500
 
@@ -56,8 +78,7 @@ export PYTHONUNBUFFERED=1   #for immeideate printing.
 
 
 
-torchrun --nnodes=1 --nproc_per_node=8 train_transfusion.py
-
+srun python combine.py
 
 
 

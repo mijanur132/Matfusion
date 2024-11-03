@@ -20,9 +20,6 @@ from torch.optim.lr_scheduler import LambdaLR
 
 
 
-
-
-
 torch.cuda.empty_cache()
 
 sys.path.insert(0,'/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch')
@@ -35,13 +32,26 @@ from transfusion_pytorch.transfusion import (
     exists
 )
 
+class JointDataset(Dataset):
+    def __init__(self, directory):
+        self.directory = directory
+        self.filenames = [f for f in os.listdir(directory) if f.endswith('.pt')]
+    def __len__(self):
+        return len(self.filenames)
+    def __getitem__(self, idx):
+        file_path = os.path.join(self.directory, self.filenames[idx])
+        tok, im=torch.load(file_path)
+        token = torch.tensor(tok, dtype=torch.long)
+        image = torch.from_numpy(im).float()
+        return token,image
+
 
 class TokenDataset(Dataset):
     def __init__(self, directory):
         self.directory = directory
         self.filenames = [f for f in os.listdir(directory) if f.endswith('.json')]
     def __len__(self):
-            return len(self.filenames)
+        return len(self.filenames)
     def __getitem__(self, idx):
         file_path = os.path.join(self.directory, self.filenames[idx])
         with open(file_path, 'r') as file:
@@ -85,6 +95,12 @@ def create_image_dataloader(directory, batch_size=1, shuffle=True):
 
 def create_image_dataloader_ddp(directory, batch_size=1, shuffle=True):
     dataset = ImageDataset(directory)
+    sampler = DistributedSampler(dataset, shuffle = shuffle)
+    dataloader = DataLoader(dataset, batch_size=batch_size, sampler = sampler, shuffle=False, num_workers=4, pin_memory=True)
+    return dataloader, sampler
+
+def create_joint_dataloader_ddp(directory, batch_size=1, shuffle=True):
+    dataset = JointDataset(directory)
     sampler = DistributedSampler(dataset, shuffle = shuffle)
     dataloader = DataLoader(dataset, batch_size=batch_size, sampler = sampler, shuffle=False, num_workers=4, pin_memory=True)
     return dataloader, sampler
@@ -276,15 +292,17 @@ def train_transfusion():
 
     use_flex_attn = True
 
-    text_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/token_text'
+    text_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/token_json'
     text_dataloader, text_sampler = create_dataloader_ddp(text_directory, batch_size=1)
-    #text_dataloader = create_dataloader(text_directory, batch_size=2)
-
+  
     directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/numpy_files/train'
     dataloader, sampler = create_image_dataloader_ddp(directory, batch_size = 1)
+
+    joint_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/comb_json_npy'
+    joint_dataloader, joint_sampler = create_joint_dataloader_ddp(joint_directory, batch_size=1)
     model = Transfusion(
         num_text_tokens = 30000,
-        dim_latent = (64), # specify multiple latent dimensions, one for each modality
+        dim_latent = (128), # specify multiple latent dimensions, one for each modality
         channel_first_latent = False,
         #modality_default_shape = ((32,), (32,)),
         transformer = dict(
@@ -296,7 +314,7 @@ def train_transfusion():
     if use_flex_attn: model = model.cuda()
     model = model.to(device)
     model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
-    optimizer = optim.Adam(model.parameters(), lr=10e-6)  # target lr
+    optimizer = optim.Adam(model.parameters(), lr=10e-8)  # target lr
     num_epochs=100
     global_max = 0
     scaler = GradScaler()
@@ -304,9 +322,12 @@ def train_transfusion():
     accum_itr = 1
     if rank==0:
         wandb.init( project="transfusion")
+    print("dataloader length:", len(joint_dataloader))
     for epoch in range(num_epochs):
         sampler.set_epoch (epoch)
-        for step, (_tokens,_images) in enumerate(zip(text_dataloader, dataloader)):
+        for step, (_tokens,_images) in enumerate(joint_dataloader):
+            # print("tokens:", _tokens[0][0])
+            # print("images:", _images)
             optimizer.zero_grad()
             glob_step+=1
             zeros_tensor = torch.zeros(1, 1)  #batchsize
@@ -361,7 +382,7 @@ def train_transfusion_dummy():
 
     use_flex_attn = True
 
-    text_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/token_text'
+    text_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/token_json'
     text_dataloader, text_sampler = create_dataloader_ddp(text_directory, batch_size=1)
     #text_dataloader = create_dataloader(text_directory, batch_size=2)
 
