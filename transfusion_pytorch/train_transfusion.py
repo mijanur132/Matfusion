@@ -380,7 +380,7 @@ def train_transfusion():
             loss = loss/accum_itr   #grad accumulation
             loss.backward()
             #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0, norm_type=2)  #grad clipping
-            if ((step+1)% accum_itr == 0 or (step+1) == len(dataloader) ):
+            if ((step+1)% accum_itr == 0 or (step+1) == len(joint_dataloader) ):
                 optimizer.step()
                 optimizer.zero_grad()
             if rank == 0 and step%1 == 0:
