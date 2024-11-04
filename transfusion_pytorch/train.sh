@@ -56,7 +56,10 @@ export PYTHONUNBUFFERED=1   #for immeideate printing.
 
 
 
-torchrun --nnodes=1 --nproc_per_node=8 train_transfusion.py
+##torchrun --nnodes=2 --nproc_per_node=8 train_transfusion.py
+
+python train_transfusion.py
+
 
 
 

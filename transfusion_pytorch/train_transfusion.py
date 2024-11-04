@@ -129,9 +129,9 @@ def create_image_dataloader_ddp(directory, batch_size=1, shuffle=True):
     dataloader = DataLoader(dataset, batch_size=batch_size, sampler = sampler, shuffle=False, num_workers=4, pin_memory=True)
     return dataloader, sampler
 
-def create_joint_dataloader_ddp(directory, batch_size=1, world_size= 1, rank= 1, shuffle=True):
+def create_joint_dataloader_ddp(directory, batch_size=1, shuffle=True):
     dataset = JointDataset(directory)
-    sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle = shuffle)
+    sampler = DistributedSampler(dataset, shuffle = shuffle)
     dataloader = DataLoader(dataset, batch_size=batch_size, sampler = sampler, shuffle=False, num_workers=4, pin_memory=True)
     return dataloader, sampler
 
@@ -296,6 +296,9 @@ def train_modality():
 
 def train_transfusion():
     x=0  #so that code does not go into slurm_ntasks loop while running without slurm. Remove this before submitting to slurm. 
+    slurm_vars = ['SLURM_NTASKS', 'SLURM_LOCALID', 'SLURM_PROCID', 'SLURM_JOB_ID']
+    found_slurm = any(var in os.environ for var in slurm_vars)
+    print("foundslurm:", found_slurm)
     if x and "SLURM_NTASKS" in os.environ:
         print("should not come here")
         world_size=int(os.environ["SLURM_NTASKS"])
@@ -315,14 +318,9 @@ def train_transfusion():
     torch.cuda.set_device(local_rank)
     device= torch.device('cuda', local_rank)
     print(f"Process {rank} using device: {device}")
-    if device.type == 'cuda':
-        print("GPU is available")
-    else:
-        print("GPU is not available, using CPU")
 
-    use_flex_attn = True
     joint_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/comb_json_npy'
-    joint_dataloader, joint_sampler = create_joint_dataloader_ddp(joint_directory, batch_size=1, world_size= world_size, rank= rank)
+    joint_dataloader, joint_sampler = create_joint_dataloader_ddp(joint_directory, batch_size=1)
     model = Transfusion(
         num_text_tokens = 30000,
         dim_latent = (128), # specify multiple latent dimensions, one for each modality
@@ -334,7 +332,7 @@ def train_transfusion():
             use_flex_attn = False
         )
     )
-    if use_flex_attn: model = model.cuda()
+    # if use_flex_attn: model = model.cuda()
     model = model.to(device)
     model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
     optimizer = optim.Adam(model.parameters(), lr=10e-6)  # target lr
@@ -362,7 +360,6 @@ def train_transfusion():
 
 
     num_epochs=100
-    global_max = 0
     scaler = GradScaler()
     glob_step = 0
     accum_itr = 1
@@ -388,22 +385,16 @@ def train_transfusion():
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0, norm_type=2)  #grad clipping
             #if ((step+1)% accum_itr == 0 or (step+1) == len(dataloader)):
             optimizer.step()
-      
             if rank == 0 and step%1 == 0:
                 print("epoch step loss lr.............................: ",epoch, glob_step, loss.item(),  optimizer.param_groups[0]['lr'])
             if rank==0:
                 wandb.log({"step": step, "train_loss": loss.item()})
-            # if torch.isnan(loss):
-            #     break
-            #if (epoch>=0 and epoch%1==0) and rank==0:
-        # if (step>=0 and epoch%1==0) and rank==0:
-        #     state['epoch']=epoch
-        #     state['step']=step
-        #     save_checkpoint_for_non_ddp(os.path.join(checkpoint_dir, f'non_ddp_checkpoint_{epoch}_{step}.pth'),state)
-        #     save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_{epoch}_{step}.pth'), state)
-        #     print(f'chepoint saved: checkpoint_{epoch}_{step}.pth')
-        #     initial_step=0
-
+        if (epoch>=0 and epoch%1==0) and rank==0:
+            state['epoch']=epoch
+            state['step']=step
+            save_checkpoint_for_non_ddp(os.path.join(checkpoint_dir, f'non_ddp_checkpoint_{epoch}_{step}.pth'),state)
+            save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_{epoch}_{step}.pth'), state)
+            print(f'chepoint saved: checkpoint_{epoch}_{step}.pth')
 
     dist.destroy_process_group()
 
