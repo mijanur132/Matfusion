@@ -296,9 +296,6 @@ def train_modality():
 
 def train_transfusion():
     x=0  #so that code does not go into slurm_ntasks loop while running without slurm. Remove this before submitting to slurm. 
-    slurm_vars = ['SLURM_NTASKS', 'SLURM_LOCALID', 'SLURM_PROCID', 'SLURM_JOB_ID']
-    found_slurm = any(var in os.environ for var in slurm_vars)
-    print("foundslurm:", found_slurm)
     if x and "SLURM_NTASKS" in os.environ:
         print("should not come here")
         world_size=int(os.environ["SLURM_NTASKS"])
@@ -314,6 +311,7 @@ def train_transfusion():
         address="127.0.0.1"
         port=29500
         print(f"world size and rank:{world_size}, {rank}, {local_rank}")
+        
     dist.init_process_group(backend="nccl", init_method=f"tcp://{address}:{port}", rank=rank, world_size=world_size)
     torch.cuda.set_device(local_rank)
     device= torch.device('cuda', local_rank)
@@ -358,19 +356,18 @@ def train_transfusion():
             latest_checkpoint = None
             print("No checkpoint files found..........")
 
-
     num_epochs=100
     scaler = GradScaler()
     glob_step = 0
-    accum_itr = 1
+    accum_itr = 4
     if rank==0:
         wandb.init( project="transfusion")
     print("dataloader length:", len(joint_dataloader))
     for epoch in range(initial_epoch, num_epochs):
         print("epoch:",epoch)
         joint_sampler.set_epoch (epoch)
+        optimizer.zero_grad()
         for step, (_tokens,_images) in enumerate(joint_dataloader):
-            optimizer.zero_grad()
             glob_step+=1
             zeros_tensor = torch.zeros(1, 1)  #batchsize
             normalized_tokens = torch.cat((zeros_tensor,_tokens), dim = 1)
@@ -382,14 +379,15 @@ def train_transfusion():
             loss = model(inp, return_loss = True)#, modality_type = 1)
             loss = loss/accum_itr   #grad accumulation
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0, norm_type=2)  #grad clipping
-            #if ((step+1)% accum_itr == 0 or (step+1) == len(dataloader)):
-            optimizer.step()
+            #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0, norm_type=2)  #grad clipping
+            if ((step+1)% accum_itr == 0 or (step+1) == len(dataloader) ):
+                optimizer.step()
+                optimizer.zero_grad()
             if rank == 0 and step%1 == 0:
                 print("epoch step loss lr.............................: ",epoch, glob_step, loss.item(),  optimizer.param_groups[0]['lr'])
             if rank==0:
                 wandb.log({"step": step, "train_loss": loss.item()})
-        if (epoch>=0 and epoch%1==0) and rank==0:
+        if (epoch>0 and epoch%1==0) and rank==0:
             state['epoch']=epoch
             state['step']=step
             save_checkpoint_for_non_ddp(os.path.join(checkpoint_dir, f'non_ddp_checkpoint_{epoch}_{step}.pth'),state)

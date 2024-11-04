@@ -3,8 +3,8 @@
 #SBATCH -J transfusion
 #SBATCH -o slurm/%j.out
 #SBATCH -e slurm/%j.err
-#SBATCH -N 8
-#SBATCH -t 01:59:00
+#SBATCH -N 16
+#SBATCH -t 00:59:00
 #SBATCH --ntasks-per-node=8
 #SBATCH --cpus-per-task=1
 #SBATCH -C nvme
