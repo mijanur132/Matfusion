@@ -4,6 +4,7 @@ import sys
 import json
 import torch
 import os
+import glob
 import wandb
 import torch.optim as optim
 import numpy as np
@@ -31,6 +32,35 @@ from transfusion_pytorch.transfusion import (
     flex_attention,
     exists
 )
+
+
+
+def restore_checkpoint(ckpt_dir, state, device):
+  if not os.path.exists(ckpt_dir):
+      print(f"Checkpoint file {ckpt_dir} does not exist.")
+      return state
+  
+  checkpt = torch.load(ckpt_dir, map_location=device)
+  state['model'].load_state_dict(checkpt['model'].state_dict(), strict=False)
+  state['step'] = checkpt['step']
+  state['epoch'] = checkpt['epoch']
+  print(f'loaded checkpoint from {ckpt_dir}')
+  return state
+
+def save_checkpoint_for_non_ddp(save_path,state):
+    model = state['model']
+    print(f'isinstance(model, torch.nn.parallel.DistributedDataParallel):{isinstance(model, torch.nn.parallel.DistributedDataParallel) }')
+    model_state = model.module.state_dict() if isinstance(model, torch.nn.parallel.DistributedDataParallel) else model.state_dict()
+    checkpoint = {
+        'model': model_state,
+    }
+    torch.save(checkpoint, save_path)
+    print(f"Checkpoint saved for non-DDP use at {save_path}")
+
+def save_checkpoint(ckpt_dir, state):
+  torch.save(state,ckpt_dir)
+
+
 
 class JointDataset(Dataset):
     def __init__(self, directory):
@@ -99,9 +129,9 @@ def create_image_dataloader_ddp(directory, batch_size=1, shuffle=True):
     dataloader = DataLoader(dataset, batch_size=batch_size, sampler = sampler, shuffle=False, num_workers=4, pin_memory=True)
     return dataloader, sampler
 
-def create_joint_dataloader_ddp(directory, batch_size=1, shuffle=True):
+def create_joint_dataloader_ddp(directory, batch_size=1, world_size= 1, rank= 1, shuffle=True):
     dataset = JointDataset(directory)
-    sampler = DistributedSampler(dataset, shuffle = shuffle)
+    sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle = shuffle)
     dataloader = DataLoader(dataset, batch_size=batch_size, sampler = sampler, shuffle=False, num_workers=4, pin_memory=True)
     return dataloader, sampler
 
@@ -291,15 +321,8 @@ def train_transfusion():
         print("GPU is not available, using CPU")
 
     use_flex_attn = True
-
-    text_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/token_json'
-    text_dataloader, text_sampler = create_dataloader_ddp(text_directory, batch_size=1)
-  
-    directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/numpy_files/train'
-    dataloader, sampler = create_image_dataloader_ddp(directory, batch_size = 1)
-
     joint_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/comb_json_npy'
-    joint_dataloader, joint_sampler = create_joint_dataloader_ddp(joint_directory, batch_size=1)
+    joint_dataloader, joint_sampler = create_joint_dataloader_ddp(joint_directory, batch_size=1, world_size= world_size, rank= rank)
     model = Transfusion(
         num_text_tokens = 30000,
         dim_latent = (128), # specify multiple latent dimensions, one for each modality
@@ -314,7 +337,30 @@ def train_transfusion():
     if use_flex_attn: model = model.cuda()
     model = model.to(device)
     model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
-    optimizer = optim.Adam(model.parameters(), lr=10e-8)  # target lr
+    optimizer = optim.Adam(model.parameters(), lr=10e-6)  # target lr
+    state = dict( model = model, step=0, epoch=0)
+
+    checkpoint_dir = '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints'
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    checkpoint_files = glob.glob(os.path.join(checkpoint_dir, "checkpoint_*.pth"))
+    checkpoint_files.sort(key=os.path.getmtime, reverse=True)
+    initial_step = int(state['step'])
+    initial_epoch = int(state['epoch'])    
+
+    if checkpoint_files:
+        latest_checkpoint = checkpoint_files[0]
+        if rank==0:
+            print(f"latest checkpoint.................:{latest_checkpoint}")
+            checkpoint_dir_temp = os.path.join(checkpoint_dir, latest_checkpoint)
+            state = restore_checkpoint(checkpoint_dir_temp, state, device)
+            initial_epoch = int(state['epoch'])+1
+            initial_step = int(state['step'])+1
+            print("initial_epoch:", initial_epoch)
+        else:
+            latest_checkpoint = None
+            print("No checkpoint files found..........")
+
+
     num_epochs=100
     global_max = 0
     scaler = GradScaler()
@@ -323,11 +369,10 @@ def train_transfusion():
     if rank==0:
         wandb.init( project="transfusion")
     print("dataloader length:", len(joint_dataloader))
-    for epoch in range(num_epochs):
-        sampler.set_epoch (epoch)
+    for epoch in range(initial_epoch, num_epochs):
+        print("epoch:",epoch)
+        joint_sampler.set_epoch (epoch)
         for step, (_tokens,_images) in enumerate(joint_dataloader):
-            # print("tokens:", _tokens[0][0])
-            # print("images:", _images)
             optimizer.zero_grad()
             glob_step+=1
             zeros_tensor = torch.zeros(1, 1)  #batchsize
@@ -348,8 +393,17 @@ def train_transfusion():
                 print("epoch step loss lr.............................: ",epoch, glob_step, loss.item(),  optimizer.param_groups[0]['lr'])
             if rank==0:
                 wandb.log({"step": step, "train_loss": loss.item()})
-            if torch.isnan(loss):
-                break
+            # if torch.isnan(loss):
+            #     break
+            #if (epoch>=0 and epoch%1==0) and rank==0:
+        # if (step>=0 and epoch%1==0) and rank==0:
+        #     state['epoch']=epoch
+        #     state['step']=step
+        #     save_checkpoint_for_non_ddp(os.path.join(checkpoint_dir, f'non_ddp_checkpoint_{epoch}_{step}.pth'),state)
+        #     save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_{epoch}_{step}.pth'), state)
+        #     print(f'chepoint saved: checkpoint_{epoch}_{step}.pth')
+        #     initial_step=0
+
 
     dist.destroy_process_group()
 
