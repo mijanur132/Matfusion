@@ -1108,7 +1108,6 @@ class Transfusion(Module):
     ) -> ModalitySample:
 
         device = self.device
-
         init_text_seq = tensor([self.sos_id], device = device)
         modality_sample = [init_text_seq, *default(prompt, [])]
         # Above default function is used here to handle the prompt parameter. If prompt is provided (not None), it is used directly; otherwise, an empty list [] is used as a default. The * operator unpacks the prompt into the modality_sample list.

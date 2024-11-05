@@ -295,7 +295,7 @@ def train_modality():
     dist.destroy_process_group()
 
 def train_transfusion():
-    x=0  #so that code does not go into slurm_ntasks loop while running without slurm. Remove this before submitting to slurm. 
+    x=1  #so that code does not go into slurm_ntasks loop while running without slurm. Remove this before submitting to slurm. 
     if x and "SLURM_NTASKS" in os.environ:
         print("should not come here")
         world_size=int(os.environ["SLURM_NTASKS"])
@@ -333,7 +333,7 @@ def train_transfusion():
     # if use_flex_attn: model = model.cuda()
     model = model.to(device)
     model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
-    optimizer = optim.Adam(model.parameters(), lr=10e-6)  # target lr
+    optimizer = optim.Adam(model.parameters(), lr=10e-9)  # target lr
     state = dict( model = model, step=0, epoch=0)
 
     checkpoint_dir = '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints'
@@ -385,21 +385,28 @@ def train_transfusion():
                 optimizer.zero_grad()
             if rank == 0 and step%1 == 0:
                 print("epoch step loss lr.............................: ",epoch, glob_step, loss.item(),  optimizer.param_groups[0]['lr'])
-            if rank==0:
-                wandb.log({"step": step, "train_loss": loss.item()})
+                wandb.log({"glob_step": glob_step, "train_loss": loss.item()})
         if (epoch>0 and epoch%1==0) and rank==0:
             state['epoch']=epoch
             state['step']=step
             save_checkpoint_for_non_ddp(os.path.join(checkpoint_dir, f'non_ddp_checkpoint_{epoch}_{step}.pth'),state)
             save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_{epoch}_{step}.pth'), state)
             print(f'chepoint saved: checkpoint_{epoch}_{step}.pth')
-
+      
+            one_multimodal_sample = model.module.sample()
+            save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/sample_out_{epoch}.pt"
+            torch.save(one_multimodal_sample,save_path)
+            # from transformers import BertTokenizer
+            # tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+            # #decoded_text = tokenizer.decode(token_ids)
+            
     dist.destroy_process_group()
 
 
+
 def train_transfusion_dummy():
-    x=0  #so that code does not go into slurm_ntasks loop while running without slurm. Remove this before submitting to slurm. 
-    if x and "SLURM_NTASKS" in os.environ:
+     #so that code does not go into slurm_ntasks loop while running without slurm. Remove this before submitting to slurm. 
+    if "SLURM_NTASKS" in os.environ:
         print("should not come here")
         world_size=int(os.environ["SLURM_NTASKS"])
         local_rank=int(os.environ["SLURM_LOCALID"])

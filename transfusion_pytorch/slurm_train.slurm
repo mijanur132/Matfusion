@@ -3,16 +3,14 @@
 #SBATCH -J transfusion
 #SBATCH -o slurm/%j.out
 #SBATCH -e slurm/%j.err
-#SBATCH -N 16
+#SBATCH -N 8
 #SBATCH -t 00:59:00
 #SBATCH --ntasks-per-node=8
 #SBATCH --cpus-per-task=1
 #SBATCH -C nvme
-#BATCH -q debug
+##SBATCH -q debug
 
-##source sbcast_env.sh
-
-
+source sbcast_env.sh
 module load PrgEnv-gnu
 module load gcc/11.2.0
 module load amd-mixed/6.0.0
@@ -25,8 +23,8 @@ export https_proxy=http://proxy.ccs.ornl.gov:3128/
 
 export TORCH_HOME=$PWD/cache
 
-source /autofs/nccs-svm1_sw/frontier/python/3.10/miniforge3/23.11.0/etc/profile.d/conda.sh
-conda activate /ccs/home/palashmr/packages/miniconda/pyt_env/transfusion
+# source /autofs/nccs-svm1_sw/frontier/python/3.10/miniforge3/23.11.0/etc/profile.d/conda.sh
+# conda activate /ccs/home/palashmr/packages/miniconda/pyt_env/transfusion
 
 
 export PATH=/ccs/home/palashmr/packages/miniconda/pyt_env/transfusion/bin:$PATH
@@ -60,7 +58,7 @@ export MIOPEN_CUSTOM_CACHE_DIR=${MIOPEN_USER_DB_PATH}
 rm -rf ${MIOPEN_USER_DB_PATH}
 mkdir -p ${MIOPEN_USER_DB_PATH}
 
-#export CUDA_VISIBLE_DEVICES=0
+
 #export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 
 export MASTER_ADDR=127.0.0.1
 export MASTER_PORT=29500
@@ -68,9 +66,7 @@ export MASTER_PORT=29500
 export TORCH_EXTENSIONS_DIR="/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/temp"  #to have a write directory
 export PYTHONUNBUFFERED=1   #for immeideate printing.
 
-
-
-srun train_transfusion.py
+srun python train_transfusion.py
 
 
 
