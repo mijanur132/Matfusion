@@ -1110,18 +1110,21 @@ class Transfusion(Module):
         device = self.device
         init_text_seq = tensor([self.sos_id], device = device)
         modality_sample = [init_text_seq, *default(prompt, [])]
+        print("modality sample:", modality_sample)
         # Above default function is used here to handle the prompt parameter. If prompt is provided (not None), it is used directly; otherwise, an empty list [] is used as a default. The * operator unpacks the prompt into the modality_sample list.
 
         # take care of moving to device
 
         modality_sample = tree_map_tensor(modality_sample, lambda t: t.to(device))
         modality_sample = tree_map_tensor(modality_sample, lambda t: rearrange(t, '-> 1') if t.ndim == 0 else t)
+        print("modality sample 2:", modality_sample)
         # The tree_map_tensor function applies the specified lambda function recursively to each tensor within the list or nested structure of modality_sample.
         # The lambda function lambda t: t.to(device) simply transfers each tensor t to the specified device
         # Checks if any tensor t has a dimension (ndim) of 0, indicating a scalar tensor, and reshapes it to have a single dimension with one element.
 
         *_, last_modality_sample = modality_sample  #unpack and get only the last element of a list using * unpacking
         assert last_modality_sample.dtype in (torch.int, torch.long), 'prompt must be text tokens'
+        print("last_modality_sample:", last_modality_sample)
 
         curr_length = 0
         curr_modality_id = None
@@ -1132,6 +1135,7 @@ class Transfusion(Module):
         is_decoding_text = True  # starts off with text decoding, and alternates with modalities depending on [som] tokens detected
 
         def maybe_transition_to_modality_decoding(seq):  # update modality shape
+            print("transition modality.........")
             nonlocal modality_shape
             nonlocal is_decoding_text
             nonlocal curr_modality_id
@@ -1172,6 +1176,7 @@ class Transfusion(Module):
             assert not exists(maybe_modality_validate_num_dim) or maybe_modality_validate_num_dim == len(modality_shape), f'expected modality type {curr_modality_id} to have {maybe_modality_validate_num_dim} dimensions but language model produced a shape of {modality_shape}'
 
             is_decoding_text = False
+            print("turned text decoding off....")
 
         # determine if to transition from start
 
@@ -1187,6 +1192,8 @@ class Transfusion(Module):
                     pbar.set_description('decoding text')
 
                     *_, seq = modality_sample  #last sample 
+
+                    print("modality sample 1195:", modality_sample)
 
                     logits, new_kv_cache = self.forward(
                         [modality_sample],
@@ -1207,6 +1214,7 @@ class Transfusion(Module):
                         sampled = torch.multinomial(probs, 1)
 
                     seq = torch.cat((seq, sampled), dim = -1)
+                    print("1127seq:", seq)
                     modality_sample[-1] = seq
 
                     pbar.update(1)
@@ -1217,7 +1225,10 @@ class Transfusion(Module):
 
                     sampled_token_id = sampled.item()
 
+                    print("sampled token id:", sampled_token_id)
+
                     if sampled_token_id == self.eos_id:
+                        print("sample token id is eos id")
                         break
 
                     maybe_transition_to_modality_decoding(seq)
@@ -1273,27 +1284,24 @@ class Transfusion(Module):
 
                     sampled_modality = sampled_modality.reshape(*modality_shape, latent_dim)
 
-                    modality_sample.append((curr_modality_id, sampled_modality))
+                    print("modality sample 1285:", modality_sample)
 
+                    modality_sample.append((curr_modality_id, sampled_modality))
                     # add the appropriate [eom]
 
                     eom_id = self.eom_ids[curr_modality_id]
                     modality_sample.append(tensor([eom_id], device = device))
-
                     # set kv cache if needed
 
                     if cache_kv:
                         cache = new_kv_cache
 
                     # back to decoding text
-
                     pbar.update(modality_length)
                     curr_length += modality_length
-
                     num_past_modalities += 1
                     curr_modality_id = None
                     modality_length = None
-
                     is_decoding_text = True
 
         if return_unprocessed_modalities:

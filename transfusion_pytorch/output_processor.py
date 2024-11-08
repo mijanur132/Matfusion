@@ -6,7 +6,7 @@ import numpy
 path = '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample'
 tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 #for item in os.listdir(path):
-item = 'sample_out_20.pt'
+item = 'sample_out_test.pt'
 file = f'{path}/{item}'
 print("opened:", file)
 input = torch.load(file)
