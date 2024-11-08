@@ -190,10 +190,7 @@ def init_distributed(rank,local_rank,ws,address,port):
 
 
 def train_modality():
-
-    print("slrum ntask:", os.getenv("SLURM_NTASKS"))
-
-    x=0  #so that code does not go into slurm_ntasks loop while running without slurm. Remove this before submitting to slurm. 
+    x=1  #so that code does not go into slurm_ntasks loop while running without slurm. Remove this before submitting to slurm. 
     if x and "SLURM_NTASKS" in os.environ:
         print("should not come here")
         world_size=int(os.environ["SLURM_NTASKS"])
@@ -212,38 +209,48 @@ def train_modality():
 
     #init_distributed(rank,local_rank,world_size, address, port)
     dist.init_process_group(backend="nccl", init_method=f"tcp://{address}:{port}", rank=rank, world_size=world_size)
-
     torch.cuda.set_device(local_rank)
-
     device= torch.device('cuda', local_rank)
-    print("device.....", device)
     print(f"Process {rank} using device: {device}")
 
-    if device.type == 'cuda':
-        print("GPU is available")
-    else:
-        print("GPU is not available, using CPU")
-
-    directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/numpy_files/train'
-    #dataloader = create_image_dataloader(directory, batch_size=1)
+    directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/numpy_files/combined'
     dataloader, sampler = create_image_dataloader_ddp(directory, batch_size = 12)
-
     model = Transfusion(
-        num_text_tokens = 256,
-        dim_latent = (384, 3), #384 for text, 3 for image
+        num_text_tokens = 8,
+        dim_latent = (64,), 
         #dim_latent = (384,192),
         channel_first_latent = True,
-        modality_default_shape = (32,),
+        modality_default_shape = (64,),
         transformer = dict(
             dim = 512,
             depth = 2,
             use_flex_attn = False
         )
     )
-   
+
     model = model.to(device)
-    #model = DDP(model, device_ids=[local_rank])
     model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
+    state = dict( model = model, step=0, epoch=0)
+    checkpoint_dir = '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mod_only'
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    checkpoint_files = glob.glob(os.path.join(checkpoint_dir, "checkpoint_*.pth"))
+    checkpoint_files.sort(key=os.path.getmtime, reverse=True)
+    initial_step = int(state['step'])
+    initial_epoch = int(state['epoch'])    
+
+    if checkpoint_files:
+        latest_checkpoint = checkpoint_files[0]
+        if rank==0:
+            print("len dataloader:", len(dataloader))
+            print(f"latest checkpoint.................:{latest_checkpoint}")
+            checkpoint_dir_temp = os.path.join(checkpoint_dir, latest_checkpoint)
+            state = restore_checkpoint(checkpoint_dir_temp, state, device)
+            initial_epoch = int(state['epoch'])+1
+            initial_step = int(state['step'])+1
+            print("initial_epoch:", initial_epoch)
+        else:
+            latest_checkpoint = None
+            print("No checkpoint files found..........")
 
     warmup_steps=1
 
@@ -255,7 +262,7 @@ def train_modality():
         return 1.0
 
     optimizer = optim.Adam(model.parameters(), lr=10e-8)  # target lr
-    scheduler = LambdaLR(optimizer, lr_lambda)
+    #scheduler = LambdaLR(optimizer, lr_lambda)
 
     num_epochs=100
     global_max = 0
@@ -266,16 +273,17 @@ def train_modality():
         wandb.init( project="transfusion")
     
     glob_step = 0
-    accum_itr = 10
+    accum_itr = 1
     for epoch in range(num_epochs):
         sampler.set_epoch (epoch)
+        optimizer.zero_grad()
         for step, _images in enumerate(dataloader):
             glob_step+=1
             #optimizer.zero_grad()
             #images = randn(2, 192, 8, 8)
             images = _images.to(device)
             im_mean = images.mean()
-            loss = model(images, return_loss = True, modality_type = 1)
+            loss = model(images, return_loss = True) #, modality_type = 1)
             loss = loss/accum_itr   #grad accumulation
             loss.backward()
             # Clip gradients: parameters, max_norm, norm_type
@@ -283,14 +291,21 @@ def train_modality():
             if ( (step+1)% accum_itr == 0 or (step+1) == len(dataloader) ):
                 optimizer.step()
                 optimizer.zero_grad()
-                #scheduler.step(glob_step)
-            if rank==0 and step%100==0:
-                print("epcho step loss lr.............................: ",epoch, glob_step, loss.item(),  optimizer.param_groups[0]['lr'])
-            if rank==0:
+            if rank==0: 
+                if step%100==0:
+                    print("epcho step glo_step loss lr.............................: ",epoch, step, glob_step, loss.item(),  optimizer.param_groups[0]['lr'])
                 wandb.log({"step": step, "train_loss": loss.item(), "mean": im_mean.item()})
-            if torch.isnan(loss):
-                break
-        scheduler.step(epoch)
+
+        if (epoch>0 and epoch%1==0) and rank==0:
+            state['epoch']=epoch
+            state['step']=step
+            #save_checkpoint_for_non_ddp(os.path.join(checkpoint_dir, f'non_ddp_checkpoint_{epoch}_{step}.pth'),state)
+            save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_mod_{epoch}_{step}.pth'), state)
+            print(f'chepoint saved: checkpoint_{epoch}_{step}.pth')
+            # one_multimodal_sample = model.module.sample()
+            # save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/mod_sample_out_{epoch}.pt"
+            # torch.save(one_multimodal_sample,save_path)
+       # scheduler.step(epoch)
 
     dist.destroy_process_group()
 
@@ -335,7 +350,6 @@ def train_transfusion():
     model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
     optimizer = optim.Adam(model.parameters(), lr=10e-9)  # target lr
     state = dict( model = model, step=0, epoch=0)
-
     checkpoint_dir = '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints'
     os.makedirs(checkpoint_dir, exist_ok=True)
     checkpoint_files = glob.glob(os.path.join(checkpoint_dir, "checkpoint_*.pth"))
@@ -500,6 +514,6 @@ def train_transfusion_dummy():
 
 if __name__=="__main__":
     #train()
-    #train_modality()
-    train_transfusion()
+    train_modality()
+    #train_transfusion()
     #train_transfusion_dummy()

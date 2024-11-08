@@ -45,7 +45,7 @@ from beartype import beartype
 from beartype.door import is_bearable
 
 rank = int(os.getenv('RANK', -1))
-do_print = False
+do_print = True
 
 
 class TorchTyping:
@@ -1402,12 +1402,14 @@ class Transfusion(Module):
         # maybe channel first
 
         if self.channel_first_latent:
-           # print("1391:",tokens.shape)
-            tokens = rearrange(tokens, 'b d ... -> b (...) d')
+            #print("1391:",tokens.shape)
+            tokens = rearrange(tokens, 'b c h w -> b (c h) w')
             #tokens = rearrange(tokens, 'b d ... -> b d (...)')
             #print("1393:",tokens.shape)
 
             #b c w h---> b  (128*128)  512
+      
+
 
         # rotary
         # b 192 8 8 ---> b (8*8) 192  ---> b 64 192 
@@ -1415,7 +1417,7 @@ class Transfusion(Module):
         #  b 3 32*32 ---> b 32*32  128
 
         batch, seq_len, device = tokens.shape[0], tokens.shape[-2], tokens.device
-       # print(batch,seq_len)
+        #if rank ==0: print("tokens.shape, batch.shape,seq_len.shape", tokens.shape, batch.shape,seq_len.shape)
         pos = torch.arange(seq_len, device = device)  #integers from 0 to seq_len-1
         rotary_emb = self.rotary_emb(pos) #rotary positional embeddings
 
@@ -1423,6 +1425,7 @@ class Transfusion(Module):
         times = torch.rand((batch,), device = device)
         padded_times = rearrange(times, 'b -> b 1 1')
         noise = torch.randn_like(tokens)
+        #print("padded_times,tokens, noise:", padded_times.shape, tokens.shape, noise.shape)
         noised_tokens = padded_times * tokens + (1. - padded_times) * noise  #  linear interpolation between the original tokens and the generated noise, weighted by the padded_times tensor
         flow = tokens - noise
 
