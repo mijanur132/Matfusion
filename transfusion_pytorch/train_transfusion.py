@@ -94,7 +94,11 @@ class ImageDataset(Dataset):
     def __init__(self, directory):
         self.directory = directory
         self.filenames = [f for f in os.listdir(directory) if f.endswith('.npy')]
-        self.transform = transforms.CenterCrop((64, 64))
+        self.transform = transforms.Compose([
+            transforms.CenterCrop((128, 128)),
+            #transforms.Lambda(lambda x: x * 25500)
+            transforms.Lambda(lambda x: (x - x.min()) / (x.max() - x.min()))
+        ])
 
     def __len__(self):
         return len(self.filenames)
@@ -217,10 +221,10 @@ def train_modality():
     dataloader, sampler = create_image_dataloader_ddp(directory, batch_size = 12)
     model = Transfusion(
         num_text_tokens = 8,
-        dim_latent = (64,), 
+        dim_latent = (128,), 
         #dim_latent = (384,192),
         channel_first_latent = True,
-        modality_default_shape = (64,),
+        modality_default_shape = (128,),
         transformer = dict(
             dim = 512,
             depth = 2,
@@ -231,7 +235,7 @@ def train_modality():
     model = model.to(device)
     model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
     state = dict( model = model, step=0, epoch=0)
-    checkpoint_dir = '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mod_only'
+    checkpoint_dir = '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mod_only_128'
     os.makedirs(checkpoint_dir, exist_ok=True)
     checkpoint_files = glob.glob(os.path.join(checkpoint_dir, "checkpoint_*.pth"))
     checkpoint_files.sort(key=os.path.getmtime, reverse=True)
@@ -252,29 +256,16 @@ def train_modality():
             latest_checkpoint = None
             print("No checkpoint files found..........")
 
-    warmup_steps=1
-
-    def lr_lambda(current_step):
-        if current_step < warmup_steps:
-            return 0.001
-        if current_step > 3:
-            return 0.001
-        return 1.0
-
-    optimizer = optim.Adam(model.parameters(), lr=10e-8)  # target lr
-    #scheduler = LambdaLR(optimizer, lr_lambda)
-
+  
+    optimizer = optim.Adam(model.parameters(), lr=10e-6)  # target lr
     num_epochs=100
     global_max = 0
-
-    scaler = GradScaler()
-
     if rank==0:
         wandb.init( project="transfusion")
     
     glob_step = 0
-    accum_itr = 1
-    for epoch in range(num_epochs):
+    accum_itr = 5
+    for epoch in range(initial_epoch,num_epochs):
         sampler.set_epoch (epoch)
         optimizer.zero_grad()
         for step, _images in enumerate(dataloader):
@@ -293,18 +284,18 @@ def train_modality():
                 optimizer.zero_grad()
             if rank==0: 
                 if step%100==0:
-                    print("epcho step glo_step loss lr.............................: ",epoch, step, glob_step, loss.item(),  optimizer.param_groups[0]['lr'])
+                    print("epcho step glo_step loss lr.............................: ",epoch, step, glob_step, loss.item(),  optimizer.param_groups[0]['lr'], images.min(),images.max())
                 wandb.log({"step": step, "train_loss": loss.item(), "mean": im_mean.item()})
 
-        if (epoch>0 and epoch%1==0) and rank==0:
+        if (epoch>0 and epoch%2==0) and rank==0:
             state['epoch']=epoch
             state['step']=step
             #save_checkpoint_for_non_ddp(os.path.join(checkpoint_dir, f'non_ddp_checkpoint_{epoch}_{step}.pth'),state)
             save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_mod_{epoch}_{step}.pth'), state)
             print(f'chepoint saved: checkpoint_{epoch}_{step}.pth')
-            # one_multimodal_sample = model.module.sample()
-            # save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/mod_sample_out_{epoch}.pt"
-            # torch.save(one_multimodal_sample,save_path)
+            one_multimodal_sample = model.module.sample()
+            save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/mod_128_sample_out_{epoch}.pt"
+            torch.save(one_multimodal_sample,save_path)
        # scheduler.step(epoch)
 
     dist.destroy_process_group()
@@ -400,16 +391,16 @@ def train_transfusion():
             if rank == 0 and step%1 == 0:
                 print("epoch step loss lr.............................: ",epoch, glob_step, loss.item(),  optimizer.param_groups[0]['lr'])
                 wandb.log({"glob_step": glob_step, "train_loss": loss.item()})
-        if (epoch>0 and epoch%1==0) and rank==0:
+        if (epoch>0 and epoch%3==0) and rank==0:
             state['epoch']=epoch
             state['step']=step
             save_checkpoint_for_non_ddp(os.path.join(checkpoint_dir, f'non_ddp_checkpoint_{epoch}_{step}.pth'),state)
             save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_{epoch}_{step}.pth'), state)
             print(f'chepoint saved: checkpoint_{epoch}_{step}.pth')
       
-            one_multimodal_sample = model.module.sample()
-            save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/sample_out_{epoch}.pt"
-            torch.save(one_multimodal_sample,save_path)
+            # one_multimodal_sample = model.module.sample()
+            # save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/sample_out_{epoch}.pt"
+            # torch.save(one_multimodal_sample,save_path)
             # from transformers import BertTokenizer
             # tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
             # #decoded_text = tokenizer.decode(token_ids)
