@@ -194,6 +194,12 @@ def init_distributed(rank,local_rank,ws,address,port):
   print("***************rank and world size*****************:",dist.get_rank(), dist.get_world_size()) ### most like wrong
 
 
+
+
+
+
+
+
 def train_mnist():
     x=1  #so that code does not go into slurm_ntasks loop while running without slurm. Remove this before submitting to slurm. 
     if x and "SLURM_NTASKS" in os.environ:
@@ -422,6 +428,9 @@ def train_transfusion():
 
 if __name__=="__main__":
     #train()
-    train_mnist()
+
+
+ 
     #train_transfusion()
     #train_transfusion_dummy()
+    train_mnist()
