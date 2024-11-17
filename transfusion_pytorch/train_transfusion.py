@@ -428,9 +428,7 @@ def train_transfusion():
 
 if __name__=="__main__":
     #train()
-
-
- 
     #train_transfusion()
     #train_transfusion_dummy()
-    train_mnist()
+    #train_mnist()
+    train_modality()
