@@ -56,8 +56,7 @@ export PYTHONUNBUFFERED=1   #for immeideate printing.
 
 
 
-#srun --nodes=1 --ntasks=8 torchrun train_transfusion.py
-# torchrun train_transfusion.py
+#srun --nodes=1 --ntasks=8 python inference_transfusion.py
 srun --nodes=1 --ntasks=8 python train_transfusion.py
 
 

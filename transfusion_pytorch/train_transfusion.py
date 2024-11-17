@@ -18,6 +18,7 @@ from torchinfo import summary
 import torch
 import torchvision.transforms as transforms
 from torch.optim.lr_scheduler import LambdaLR
+from torchvision.datasets import MNIST
 
 
 
@@ -193,7 +194,7 @@ def init_distributed(rank,local_rank,ws,address,port):
   print("***************rank and world size*****************:",dist.get_rank(), dist.get_world_size()) ### most like wrong
 
 
-def train_modality():
+def train_mnist():
     x=1  #so that code does not go into slurm_ntasks loop while running without slurm. Remove this before submitting to slurm. 
     if x and "SLURM_NTASKS" in os.environ:
         print("should not come here")
@@ -217,17 +218,24 @@ def train_modality():
     device= torch.device('cuda', local_rank)
     print(f"Process {rank} using device: {device}")
 
-    directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/numpy_files/combined'
-    dataloader, sampler = create_image_dataloader_ddp(directory, batch_size = 12)
+    directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/mnist'
+    transform = transforms.Compose([
+        transforms.ToTensor(),  # Convert to tensor
+        transforms.Normalize((0.5,), (0.5,))  # Normalize to range [-1, 1]
+    ])
+    #if rank == 0:
+    train_data = MNIST(root = directory, train=True, download=True, transform=transform)
+    dataloader = DataLoader(train_data, batch_size=64, shuffle=True)   
+
     model = Transfusion(
         num_text_tokens = 8,
-        dim_latent = (128,), 
+        dim_latent = (28,), 
         #dim_latent = (384,192),
         channel_first_latent = True,
-        modality_default_shape = (128,),
+        modality_default_shape = (28,),
         transformer = dict(
             dim = 512,
-            depth = 2,
+            depth = 4,
             use_flex_attn = False
         )
     )
@@ -235,17 +243,18 @@ def train_modality():
     model = model.to(device)
     model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
     state = dict( model = model, step=0, epoch=0)
-    checkpoint_dir = '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mod_only_128'
+    checkpoint_dir = '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mnist_depth6'
     os.makedirs(checkpoint_dir, exist_ok=True)
     checkpoint_files = glob.glob(os.path.join(checkpoint_dir, "checkpoint_*.pth"))
     checkpoint_files.sort(key=os.path.getmtime, reverse=True)
     initial_step = int(state['step'])
-    initial_epoch = int(state['epoch'])    
+    initial_epoch = int(state['epoch'])   
+
 
     if checkpoint_files:
         latest_checkpoint = checkpoint_files[0]
         if rank==0:
-            print("len dataloader:", len(dataloader))
+            #print("len dataloader:", len(dataloader))
             print(f"latest checkpoint.................:{latest_checkpoint}")
             checkpoint_dir_temp = os.path.join(checkpoint_dir, latest_checkpoint)
             state = restore_checkpoint(checkpoint_dir_temp, state, device)
@@ -265,14 +274,15 @@ def train_modality():
     
     glob_step = 0
     accum_itr = 5
+
     for epoch in range(initial_epoch,num_epochs):
-        sampler.set_epoch (epoch)
+        #sampler.set_epoch (epoch)
         optimizer.zero_grad()
-        for step, _images in enumerate(dataloader):
+        for step, (_images,labels) in enumerate(dataloader):
             glob_step+=1
             #optimizer.zero_grad()
             #images = randn(2, 192, 8, 8)
-            images = _images.to(device)
+            images = _images.to(device).float()
             im_mean = images.mean()
             loss = model(images, return_loss = True) #, modality_type = 1)
             loss = loss/accum_itr   #grad accumulation
@@ -287,14 +297,15 @@ def train_modality():
                     print("epcho step glo_step loss lr.............................: ",epoch, step, glob_step, loss.item(),  optimizer.param_groups[0]['lr'], images.min(),images.max())
                 wandb.log({"step": step, "train_loss": loss.item(), "mean": im_mean.item()})
 
-        if (epoch>0 and epoch%2==0) and rank==0:
+        if (epoch>0 and epoch%1==0) and rank==0:
             state['epoch']=epoch
             state['step']=step
             #save_checkpoint_for_non_ddp(os.path.join(checkpoint_dir, f'non_ddp_checkpoint_{epoch}_{step}.pth'),state)
-            save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_mod_{epoch}_{step}.pth'), state)
-            print(f'chepoint saved: checkpoint_{epoch}_{step}.pth')
-            one_multimodal_sample = model.module.sample()
-            save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/mod_128_sample_out_{epoch}.pt"
+            save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_mnist1_128_{epoch}_{step}.pth'), state)
+            print(f'chepoint saved: checkpoint_mnist_{epoch}_{step}.pth')
+            prime = [tensor(model.module.som_ids[0])]
+            one_multimodal_sample = model.module.sample(prime, max_length = 4, cache_kv = True)
+            save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/mod_mnist_14nov_{epoch}.pt"
             torch.save(one_multimodal_sample,save_path)
        # scheduler.step(epoch)
 
@@ -411,6 +422,6 @@ def train_transfusion():
 
 if __name__=="__main__":
     #train()
-    train_modality()
+    train_mnist()
     #train_transfusion()
     #train_transfusion_dummy()

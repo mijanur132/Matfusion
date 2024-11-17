@@ -39,24 +39,34 @@ def text_process():
         f.write(decoded_text)
 
 def mod_process():
-    path = '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/mod_128_sample_out_10.pt'
+    path = '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/mod_mnist_1_128_18.pt'
     print(f"input:{path}")
     input = torch.load(path)
     print(input)
-    tokens = input[1][1:][0]
+    tokens = input[2][1:][0]
     print(tokens)
     n=np.array(tokens.cpu())
     print(f"array:{n},{n.shape}")
     ns = (n-n.min())/(n.max()-n.min())
     print(n.min(), n.max())
-    # fig=im.fromarray(np.uint8((n*255)))
+    fig=im.fromarray(np.uint8((ns*255)))
     op_path = f"{path}.png"
     print(f"saved:{op_path}")
-    # fig.save(op_path)
-    plot_1d(op_path, n)
+    fig.save(op_path)
+    op_path = f"{path}_1.png"
+    plot_1d(op_path, ns)
+
+def mod_process2():
+    path= "/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/pred_flow_20241114-170403.npy"
+    path= "/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/pred_flow.npy"
+    z=np.load(path)
+    fig=im.fromarray(np.uint8(z[0]*5))
+    op_path = f"{path}.png"
+    fig.save(op_path)
 
 if __name__ == "__main__":
-    mod_process()
+    #mod_process()
+    mod_process2()
     #text_process()
 
    

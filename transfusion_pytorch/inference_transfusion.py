@@ -94,13 +94,13 @@ def sample_transfusion():
     #joint_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/comb_json_npy'
     #joint_dataloader, joint_sampler = create_joint_dataloader_ddp(joint_directory, batch_size=1)
     model = Transfusion(
-        num_text_tokens = 30000,
-        dim_latent = (128), # specify multiple latent dimensions, one for each modality
-        channel_first_latent = False,
-        modality_default_shape = (64,),
+        num_text_tokens = 8,
+        dim_latent = (28), # specify multiple latent dimensions, one for each modality
+        channel_first_latent = True,
+        modality_default_shape = (28,),
         transformer = dict(
             dim = 512,
-            depth = 2,
+            depth = 6,
             use_flex_attn = False
         )
     )
@@ -109,7 +109,7 @@ def sample_transfusion():
     optimizer = optim.Adam(model.parameters(), lr=10e-9)  # target lr
     state = dict( model = model, step=0, epoch=0)
 
-    checkpoint_dir = '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints'
+    checkpoint_dir = '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mnist_depth6'
     os.makedirs(checkpoint_dir, exist_ok=True)
     checkpoint_files = glob.glob(os.path.join(checkpoint_dir, "checkpoint_*.pth"))
     checkpoint_files.sort(key=os.path.getmtime, reverse=True)
@@ -130,9 +130,9 @@ def sample_transfusion():
             print("No checkpoint files found..........")
     if rank == 0:
         prime = [tensor(model.module.som_ids[0])]
-        #one_multimodal_sample = model.module.sample(prime, max_length = 2048, cache_kv = True)
-        one_multimodal_sample = model.module.sample( max_length = 2048, cache_kv = True)
-        save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/sample_out_test_1.pt"
+        one_multimodal_sample = model.module.sample(prime, max_length = 8, cache_kv = True)
+        #one_multimodal_sample = model.module.sample( max_length = 2048, cache_kv = True)
+        save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/sample_mnist6_1.pt"
         torch.save(one_multimodal_sample,save_path)
         
   

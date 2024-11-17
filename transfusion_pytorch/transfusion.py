@@ -45,7 +45,8 @@ from beartype import beartype
 from beartype.door import is_bearable
 
 rank = int(os.getenv('RANK', -1))
-do_print = True
+do_print = False
+print_i = 0 
 
 
 class TorchTyping:
@@ -1009,7 +1010,7 @@ class Transfusion(Module):
         assert len(self.modality_encoder) == self.num_modalities
         assert len(self.modality_decoder) == self.num_modalities
 
-        if rank ==0 and do_print: print(modality_encoder)
+        if rank ==0 and do_print: print("mod enco:",modality_encoder)
 
         # default token lengths for respective modality
         # fallback if the language model does not come up with valid dimensions
@@ -1110,21 +1111,21 @@ class Transfusion(Module):
         device = self.device
         init_text_seq = tensor([self.sos_id], device = device)
         modality_sample = [init_text_seq, *default(prompt, [])]
-        print("modality sample:", modality_sample)
+        if rank == 0 and do_print: print("modality sample:", modality_sample)
         # Above default function is used here to handle the prompt parameter. If prompt is provided (not None), it is used directly; otherwise, an empty list [] is used as a default. The * operator unpacks the prompt into the modality_sample list.
 
         # take care of moving to device
 
         modality_sample = tree_map_tensor(modality_sample, lambda t: t.to(device))
         modality_sample = tree_map_tensor(modality_sample, lambda t: rearrange(t, '-> 1') if t.ndim == 0 else t)
-        print("modality sample 2:", modality_sample)
+        if rank == 0 and do_print: print("modality sample 2:", modality_sample)
         # The tree_map_tensor function applies the specified lambda function recursively to each tensor within the list or nested structure of modality_sample.
         # The lambda function lambda t: t.to(device) simply transfers each tensor t to the specified device
         # Checks if any tensor t has a dimension (ndim) of 0, indicating a scalar tensor, and reshapes it to have a single dimension with one element.
 
         *_, last_modality_sample = modality_sample  #unpack and get only the last element of a list using * unpacking
         assert last_modality_sample.dtype in (torch.int, torch.long), 'prompt must be text tokens'
-        print("last_modality_sample:", last_modality_sample)
+        if rank == 0 and do_print: print("last_modality_sample:", last_modality_sample)
 
         curr_length = 0
         curr_modality_id = None
@@ -1193,7 +1194,7 @@ class Transfusion(Module):
 
                     *_, seq = modality_sample  #last sample 
 
-                    print("modality sample 1195:", modality_sample)
+                    print("Modality sample 1195:", modality_sample)
 
                     logits, new_kv_cache = self.forward(
                         [modality_sample],
@@ -1214,7 +1215,7 @@ class Transfusion(Module):
                         sampled = torch.multinomial(probs, 1)
 
                     seq = torch.cat((seq, sampled), dim = -1)
-                    print("1127seq:", seq)
+                    if rank == 0 and do_print: print("1127seq:", seq)
                     modality_sample[-1] = seq
 
                     pbar.update(1)
@@ -1224,11 +1225,7 @@ class Transfusion(Module):
                         cache = new_kv_cache
 
                     sampled_token_id = sampled.item()
-
-                    print("sampled token id:", sampled_token_id)
-
                     if sampled_token_id == self.eos_id:
-                        print("sample token id is eos id")
                         break
 
                     maybe_transition_to_modality_decoding(seq)
@@ -1255,10 +1252,9 @@ class Transfusion(Module):
 
                     def ode_step_fn(step_times, denoised):
                         nonlocal new_kv_cache
-
                         step_times = rearrange(step_times, ' -> 1 1') # batch size of 1
                         step_times = F.pad(step_times, (num_past_modalities, 0), value = 1.) # past decoded modalities receive a time conditioning of 1.
-
+                        if rank == 0 and do_print: print("before embdes...")
                         embeds, new_kv_cache = self.forward(
                             [[*modality_sample, (curr_modality_id, denoised)]],
                             times = step_times,
@@ -1267,24 +1263,36 @@ class Transfusion(Module):
                             return_kv_cache = True,
                             decoding_text_or_modality = 'modality'
                         )
-
+                        if rank == 0 and do_print: print("embeds:", embeds, rank)
                         to_flow_pred = self.model_to_latent_preds[curr_modality_id]
-                        flow = to_flow_pred(embeds)
-
+                        if rank == 0 and do_print: print("to_flow_pred:", to_flow_pred)
+                        flow = to_flow_pred(embeds)  #predicted flows
+                        
+                        import datetime
+                        timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+                        pred_flow_np = flow.clone().detach().cpu().numpy()
+                        pathx= f'/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/pred_flow_{timestamp}.npy'
+                        np.save(pathx, pred_flow_np)
+                        print(f"sample saved at {pathx}")
+                        
+                        if rank == 0 and do_print: print("embeds.shape, flow.shape:",embeds.shape, flow.shape, modality_length)
+                        #torch.Size([1, 35, 512]) torch.Size([1, 35, 28]) 28
                         return flow[0, -modality_length:]
-
+                    
                     times = torch.linspace(0, 1, modality_steps, device = device)
+                    noise= noise/1.0
+                    if rank == 0 and do_print: print("noise:", noise) #noise is passed as modality input below
                     trajectory = self.odeint_fn(ode_step_fn, noise, times)
-
+                    if rank == 0 and do_print: print("trajectory:",trajectory, trajectory.shape) #torch.Size([16, 28, 28])
                     # add the sampled modality tokens
 
-                    sampled_modality = trajectory[-1]
+                    sampled_modality = trajectory[-1]  # 28,28
 
                     # reshape
 
                     sampled_modality = sampled_modality.reshape(*modality_shape, latent_dim)
 
-                    print("modality sample 1285:", modality_sample)
+                    if rank == 0 and do_print: print("modality sample 1285:", sampled_modality ,sampled_modality.shape) #28,28
 
                     modality_sample.append((curr_modality_id, sampled_modality))
                     # add the appropriate [eom]
@@ -1292,6 +1300,8 @@ class Transfusion(Module):
                     eom_id = self.eom_ids[curr_modality_id]
                     modality_sample.append(tensor([eom_id], device = device))
                     # set kv cache if needed
+
+                    #print("modality sample 1296:", modality_sample)
 
                     if cache_kv:
                         cache = new_kv_cache
@@ -1318,13 +1328,16 @@ class Transfusion(Module):
 
             modality_id, modality = sample
             maybe_modality_decoder = self.modality_decoder[modality_id]
+            if rank == 0 and do_print: print("maybe_modality_decoder:", maybe_modality_decoder)
 
             if self.channel_first_latent:
+                if rank == 0 and do_print: print("before mod:", modality, modality.shape)
                 modality = rearrange(modality, '... d -> d ...')
+                if rank == 0 and do_print: print("after mod:", modality, modality.shape)
 
             if exists(maybe_modality_decoder):
                 modality = maybe_modality_decoder(modality)
-
+            if rank == 0 and do_print: print("final processed modality:", modality)
             processed_modality_sample.append((modality_id, modality))
 
         return processed_modality_sample
@@ -1387,14 +1400,15 @@ class Transfusion(Module):
         modality_type: int | None = None,
         return_loss = True
     ) -> Float['']:
-
+        
+        rank = int(os.getenv('SLURM_PROCID', -1))
         if self.num_modalities > 1:
             assert exists(modality_type), '`modality_type` must be explicitly passed in on forward when training on greater than 1 modality'
 
-        modality_type = default(modality_type, 0)  #mod 1 for image
+        modality_type = default(modality_type, 0)  
 
         transform = self.modality_token_transform[modality_type]  #Linear(dim_latent, dim)  dim is 512 xformer dimension
-       # print("1384:",transform, self.latent_to_model_projs[1])
+        if rank ==0 and do_print: print("1384:",transform, self.latent_to_model_projs[0])
         latent_to_model_fn = self.latent_to_model_projs[modality_type]  #a nn to change shape: Linear(dim_latent, dim) 
         model_to_flow_pred_fn = self.model_to_latent_preds[modality_type]
         tokens = transform(modalities)
@@ -1417,17 +1431,18 @@ class Transfusion(Module):
         #  b 3 32*32 ---> b 32*32  128
 
         batch, seq_len, device = tokens.shape[0], tokens.shape[-2], tokens.device
-        #if rank ==0: print("tokens.shape, batch.shape,seq_len.shape", tokens.shape, batch.shape,seq_len.shape)
+        if rank == 0 and do_print: print("tokens.shape, batch.shape,seq_len.shape", tokens.shape, batch, seq_len)
         pos = torch.arange(seq_len, device = device)  #integers from 0 to seq_len-1
         rotary_emb = self.rotary_emb(pos) #rotary positional embeddings
 
         # times
         times = torch.rand((batch,), device = device)
         padded_times = rearrange(times, 'b -> b 1 1')
+        if rank == 0 and do_print: print("max min token:", tokens.max(), tokens.min())
         noise = torch.randn_like(tokens)
-        #print("padded_times,tokens, noise:", padded_times.shape, tokens.shape, noise.shape)
-        noised_tokens = padded_times * tokens + (1. - padded_times) * noise  #  linear interpolation between the original tokens and the generated noise, weighted by the padded_times tensor
-        flow = tokens - noise
+        if rank == 0 and do_print: print("padded_times,tokens, noise:", padded_times.shape, tokens.shape, noise.shape)
+        noised_tokens = padded_times * tokens*0.1 + (1. - padded_times) * noise  #  linear interpolation between the original tokens and the generated noise, weighted by the padded_times tensor
+        flow = tokens# - noise
 
         # attention
         noised_tokens = latent_to_model_fn(noised_tokens)   # a nn to change dimension latent to transformer dimension
@@ -1444,6 +1459,14 @@ class Transfusion(Module):
         )
 
         pred_flow = model_to_flow_pred_fn(embed)
+        if rank==0 and not do_print: 
+            #print("flow, pred_flow:",flow, pred_flow)
+            flow_np = flow.clone().detach().cpu().numpy()
+            pred_flow_np = pred_flow.clone().detach().cpu().numpy()
+            # Save to files
+            np.save('flow.npy', flow_np)
+            np.save('pred_flow.npy', pred_flow_np)
+            
 
         if not return_loss:
             return pred_flow
@@ -1480,9 +1503,14 @@ class Transfusion(Module):
         tuple[Float[''], LossBreakdown] |
         list[Float['b _ _']]
     ):
+        #rank = int(os.getenv('RANK', -1))
+        rank = int(os.getenv('SLURM_PROCID', -1))
+        #print("came to forward...", modalities)
+        #rank = 0  #change this unless inference printing
         is_decoding = exists(decoding_text_or_modality)
         is_text_only = torch.is_tensor(modalities) and modalities.dtype in (torch.int, torch.long)
         is_modality_only = torch.is_tensor(modalities) and modalities.dtype == torch.float
+        #if rank ==0: print("is_modality_only:",is_modality_only)
         # handle ema model being passed in for velocity consistency loss
 
         if isinstance(velocity_consistency_ema_model, EMA):
@@ -1505,12 +1533,12 @@ class Transfusion(Module):
 
         if is_modality_only:
             assert return_loss
-           # print("1487:",modalities.shape)
+            if rank == 0 and do_print: print("1487:",modalities.shape)
             return self.forward_modality(modalities, modality_type = modality_type)
 
         device = self.device
         tensor_ = partial(tensor, device = device)
-
+        if rank == 0 and do_print: print("before need velocity matching......")
         # save a copy for ema model for velocity matching
         if need_velocity_matching:
             velocity_modalities = modalities
@@ -1677,6 +1705,7 @@ class Transfusion(Module):
             print("text before embedd:",text)
 
         text_tokens = self.text_embed(text)  #nn.Embedding(effective_num_text_tokens, xformer_dim)
+        # does text_embed needs to be pretrained or learned during training?
 
         if rank==0 and do_print:
             print("text, texttokens:", text.shape, text_tokens.shape) #(1,25), (1,25,512)
@@ -1778,20 +1807,6 @@ class Transfusion(Module):
         # flow loss
 
         pred_flows = [fn(embed) for fn in self.model_to_latent_preds]
-        #print("is nan embed flow/mod loss:", torch.isnan(embed).any().item(), torch.isnan(pred_flows).any().item())
-
-        #****
-        embed_has_nan = torch.isnan(embed).any().item() if torch.is_tensor(embed) else 'embed is not a tensor'
-
-        # Check each tensor in pred_flows for NaN values and handle the case where pred_flows is not a list of tensors
-        if isinstance(pred_flows, list) and all(torch.is_tensor(x) for x in pred_flows):
-            pred_flows_has_nan = any(torch.isnan(x).any().item() for x in pred_flows)
-        else:
-            pred_flows_has_nan = 'pred_flows is not a list of tensors'
-        # if rank == 0:
-        #     print("is nan embed flow/mod loss:", embed_has_nan, pred_flows_has_nan)
-
-        #****
 
         # early return for velocity consistency ema model
 
