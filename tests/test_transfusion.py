@@ -9,7 +9,11 @@ import os
 
 sys.path.insert(0,'/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch')
 
+import torch
 from torch import nn, randint, randn, tensor, cuda
+
+import torch._dynamo
+torch._dynamo.config.suppress_errors = True
 
 cuda_available = cuda.is_available()
 
@@ -21,9 +25,11 @@ from transfusion_pytorch.transfusion import (
 
 @pytest.mark.parametrize('cache_kv', (False, True))
 @pytest.mark.parametrize('use_flex_attn', (False, True))
+@pytest.mark.parametrize('add_direction_loss', (False, True))
 def test_transfusion(
     cache_kv: bool,
-    use_flex_attn: bool
+    use_flex_attn: bool,
+    add_direction_loss: bool
 ):
     if use_flex_attn and (not exists(flex_attention) or not cuda_available):
         return pytest.skip()
@@ -35,6 +41,7 @@ def test_transfusion(
         num_text_tokens = text_tokens,
         dim_latent = (384, 192), # specify multiple latent dimensions, one for each modality
         modality_default_shape = ((32,), (64,)),
+        add_flow_direction_loss = add_direction_loss,
         transformer = dict(
             dim = 512,
             depth = 2,
@@ -241,7 +248,7 @@ def test_text_image_end_to_end(
         num_text_tokens = 4,
         dim_latent = 384,
         channel_first_latent = True,
-        modality_default_shape = ((4, 4)),
+        modality_default_shape = ((4, 4),),
         modality_encoder = mock_vae_encoder,
         modality_decoder = mock_vae_decoder,
         transformer = dict(
@@ -296,7 +303,7 @@ def test_velocity_consistency():
         dim_latent = 384,
         channel_first_latent = True,
         modality_default_shape = ((4, 4)),
-        modality_validate_num_dim = 2,
+        modality_num_dim = 2,
         modality_encoder = mock_encoder,
         modality_decoder = mock_decoder,
         transformer = dict(
@@ -337,3 +344,34 @@ def test_velocity_consistency():
     loss.backward()
 
     assert exists(breakdown.velocity)
+
+def test_axial_pos_emb():
+    model = Transfusion(
+        num_text_tokens = 256,
+        dim_latent = (384, 192),                    # specify multiple latent dimensions
+        modality_default_shape = ((2, 2), (2,)),    # default shapes for first and second modality
+        fallback_to_default_shape_if_invalid = True,
+        add_pos_emb = True,
+        modality_num_dim = (2, 1),
+        transformer = dict(
+            dim = 512,
+            depth = 8
+        )
+    )
+
+    # then for the Tensors of type float, you can pass a tuple[int, Tensor] and specify the modality index in the first position
+
+    # any torch.long is text, torch.float is modalities
+
+    text_images_and_audio = [
+        [randint(0, 256, (16,)), (0, randn(2, 3, 384)), randint(0, 256, (8,)), (1, randn(6, 192))],
+        [randint(0, 256, (16,)), randn(1, 4, 384), randint(0, 256, (5,)), (1, randn(2, 192)), randint(0, 256, (9,))]
+    ]
+
+    loss = model(text_images_and_audio)
+
+    loss.backward()
+
+    # after much training
+
+    one_multimodal_sample = model.sample()
