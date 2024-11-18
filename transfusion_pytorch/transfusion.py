@@ -1412,6 +1412,9 @@ class Transfusion(Module):
         latent_to_model_fn = self.latent_to_model_projs[modality_type]  #a nn to change shape: Linear(dim_latent, dim) 
         model_to_flow_pred_fn = self.model_to_latent_preds[modality_type]
         tokens = transform(modalities)
+        if rank ==0 and do_print:
+            print("modalities:", modalities)
+            print("tokens:", tokens)
 
         # maybe channel first
 
@@ -1420,11 +1423,8 @@ class Transfusion(Module):
             tokens = rearrange(tokens, 'b c h w -> b (c h) w')
             #tokens = rearrange(tokens, 'b d ... -> b d (...)')
             #print("1393:",tokens.shape)
-
             #b c w h---> b  (128*128)  512
       
-
-
         # rotary
         # b 192 8 8 ---> b (8*8) 192  ---> b 64 192 
         # b 3  128 128  --> b 128*128 3
@@ -1460,7 +1460,7 @@ class Transfusion(Module):
 
         pred_flow = model_to_flow_pred_fn(embed)
         if rank==0 and not do_print: 
-            #print("flow, pred_flow:",flow, pred_flow)
+            print("flow, pred_flow............", flow.shape,flow.max(), pred_flow.max())
             flow_np = flow.clone().detach().cpu().numpy()
             pred_flow_np = pred_flow.clone().detach().cpu().numpy()
             # Save to files
