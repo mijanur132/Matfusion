@@ -29,14 +29,15 @@ def plot_1d(path, cbed_data):
 def text_process():
     file = '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/mod_128_sample_out_10.pt'
 
-    input = torch.load(file)
-    tokens = input[0][1:]
+    #input = torch.load(file)
+    #tokens = input[0][1:]
+    tokens = [10, 101, 14, 64, 67, 59, 64, 67, 12]
     print("tokens:", tokens)
     decoded_text = tokenizer.decode(tokens)
     out_file = f'{file}.txt'
     print(decoded_text)
-    with open(out_file, 'w') as f:
-        f.write(decoded_text)
+    # with open(out_file, 'w') as f:
+    #     f.write(decoded_text)
 
 def mod_process():
     path = '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/mod_128_sample_out_16.pt'
@@ -66,7 +67,7 @@ def mod_process2():
 
 if __name__ == "__main__":
     #mod_process()
-    mod_process2()
-    #text_process()
+    #mod_process2()
+    text_process()
 
    
