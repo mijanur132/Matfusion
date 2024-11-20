@@ -105,8 +105,8 @@ class JointDataset(Dataset):
         token = token.cuda().long()
         # nt = normalized_tokens.squeeze()
 
-        im = torch.tensor(im, dtype=torch.float)[0]
-        im_t = self.transform(im)#.unsqueeze(0)
+        im = torch.tensor(im, dtype=torch.float)
+        im_t = self.transform(im).unsqueeze(0)
         return token,im_t
 
 class TokenDataset(Dataset):
@@ -552,8 +552,8 @@ def train_transfusion():
 
     model = Transfusion(
         num_text_tokens = 20,
-        dim_latent = dim_latent*4,
-        modality_default_shape = (2,),
+        dim_latent = dim_latent,
+        modality_default_shape = (128, 128),
         # modality_encoder = encoder,
         # modality_decoder = decoder,
         add_pos_emb = True,
@@ -612,19 +612,16 @@ def train_transfusion():
         print("epoch:",epoch)
         joint_sampler.set_epoch (epoch)
         optimizer.zero_grad()
-        for step, inp in enumerate(joint_dataloader):
-            if rank == 0: print("inp:", inp)
+        for step, (_tokens,_images)  in enumerate(joint_dataloader):
+            
             glob_step+=1
-            if rank == 0:
-                print("inp:",inp[0])
-                print("inp 0, inp 1:", inp[0][0].shape,inp[0][1].shape) #[torch.Size([2049]) torch.Size([ 64, 64]])
             # zeros_tensor = torch.zeros(1, 1)  #batchsize
             # normalized_tokens = torch.cat((zeros_tensor,_tokens), dim = 1)
-            # normalized_tokens = normalized_tokens.cuda().long()
-            # nt = normalized_tokens.squeeze()
-            # images = _images.to(device)
-            # im = images.squeeze()
-            # inp = [[nt, (0, im)]]
+            normalized_tokens = normalized_tokens.cuda().long()
+            nt = normalized_tokens.squeeze()
+            images = _images.to(device)
+            im = images.squeeze()
+            inp = [[nt, (0, im)]]
             loss = model(inp, return_loss = True)#, modality_type = 1)
             loss = loss/accum_itr   #grad accumulation
             loss.backward()
@@ -655,7 +652,7 @@ def train_transfusion():
 
 if __name__=="__main__":
     #train_text()
-    train_transfusion()
+    #train_transfusion()
     #train_transfusion_dummy()
     #train_mnist()
-    #train_modality()
+    train_modality()

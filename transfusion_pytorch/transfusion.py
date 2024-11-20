@@ -456,7 +456,7 @@ class MLPAxialPositions(Module):
             modality_shape = tensor(modality_shape)
 
         modality_shape = modality_shape.to(self.device)
-
+        print(f"modality_shape:{modality_shape}, num_dimensions: {self.num_dimensions}")
         assert len(modality_shape) == self.num_dimensions
         dimensions = modality_shape.tolist()
 
@@ -1791,7 +1791,6 @@ class Transfusion(Module):
 
         is_text_only = is_tensor(modalities) and modalities.dtype in (torch.int, torch.long)
         is_modality_only = is_tensor(modalities) and modalities.dtype == torch.float
-
         # handle ema model being passed in for velocity consistency loss
 
         if isinstance(velocity_consistency_ema_model, EMA):
