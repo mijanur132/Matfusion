@@ -450,17 +450,34 @@ def train_transfusion():
 
     joint_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/comb_json_npy'
     joint_dataloader, joint_sampler = create_joint_dataloader_ddp(joint_directory, batch_size=1)
+    # model = Transfusion(
+    #     num_text_tokens = 30000,
+    #     dim_latent = (128), # specify multiple latent dimensions, one for each modality
+    #     channel_first_latent = False,
+    #     #modality_default_shape = ((32,), (32,)),
+    #     transformer = dict(
+    #         dim = 512,
+    #         depth = 2,
+    #         use_flex_attn = False
+    #     )
+    # )
+
     model = Transfusion(
         num_text_tokens = 30000,
-        dim_latent = (128), # specify multiple latent dimensions, one for each modality
-        channel_first_latent = False,
-        #modality_default_shape = ((32,), (32,)),
+        dim_latent = 128,
+        #modality_default_shape = (14, 14),
+        #modality_encoder = encoder,
+        #modality_decoder = decoder,
+        add_pos_emb = True,
+        modality_num_dim = 2,
         transformer = dict(
             dim = 512,
-            depth = 2,
-            use_flex_attn = False
+            depth = 4,
+            dim_head = 32,
+            heads = 8
         )
     )
+
     # if use_flex_attn: model = model.cuda()
     model = model.to(device)
     model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
@@ -473,18 +490,18 @@ def train_transfusion():
     initial_step = int(state['step'])
     initial_epoch = int(state['epoch'])    
 
-    if checkpoint_files:
-        latest_checkpoint = checkpoint_files[0]
-        if rank==0:
-            print(f"latest checkpoint.................:{latest_checkpoint}")
-            checkpoint_dir_temp = os.path.join(checkpoint_dir, latest_checkpoint)
-            state = restore_checkpoint(checkpoint_dir_temp, state, device)
-            initial_epoch = int(state['epoch'])+1
-            initial_step = int(state['step'])+1
-            print("initial_epoch:", initial_epoch)
-        else:
-            latest_checkpoint = None
-            print("No checkpoint files found..........")
+    # if checkpoint_files:
+    #     latest_checkpoint = checkpoint_files[0]
+    #     if rank==0:
+    #         print(f"latest checkpoint.................:{latest_checkpoint}")
+    #         checkpoint_dir_temp = os.path.join(checkpoint_dir, latest_checkpoint)
+    #         state = restore_checkpoint(checkpoint_dir_temp, state, device)
+    #         initial_epoch = int(state['epoch'])+1
+    #         initial_step = int(state['step'])+1
+    #         print("initial_epoch:", initial_epoch)
+    #     else:
+    #         latest_checkpoint = None
+    #         print("No checkpoint files found..........")
 
     num_epochs=100
     scaler = GradScaler()
@@ -514,21 +531,28 @@ def train_transfusion():
                 optimizer.step()
                 optimizer.zero_grad()
             if rank == 0 and step%1 == 0:
-                print("epoch step loss lr.............................: ",epoch, glob_step, loss.item(),  optimizer.param_groups[0]['lr'])
+                print("epoch step loss lr.............................: ",epoch, glob_step, loss.item())
                 wandb.log({"glob_step": glob_step, "train_loss": loss.item()})
-        if (epoch>0 and epoch%3==0) and rank==0:
+        if (epoch>0 and epoch%1==0) and rank==0:
             state['epoch']=epoch
             state['step']=step
             save_checkpoint_for_non_ddp(os.path.join(checkpoint_dir, f'non_ddp_checkpoint_{epoch}_{step}.pth'),state)
             save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_{epoch}_{step}.pth'), state)
             print(f'chepoint saved: checkpoint_{epoch}_{step}.pth')
       
-            # one_multimodal_sample = model.module.sample()
-            # save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/sample_out_{epoch}.pt"
-            # torch.save(one_multimodal_sample,save_path)
-            # from transformers import BertTokenizer
-            # tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-            # #decoded_text = tokenizer.decode(token_ids)
+            one_multimodal_sample = model.sample(max_length = 96)
+            print_modality_sample(one_multimodal_sample)
+            if len(one_multimodal_sample) < 2:
+                continue
+
+            maybe_label, maybe_image, *_ = one_multimodal_sample
+            print("label:", maybe_label)
+            filename = f'{step}.{maybe_label[1].item()}.png'
+
+            save_image(
+                maybe_image[1].cpu().clamp(min = 0., max = 1.),
+                str(results_folder / filename),
+            )
             
     dist.destroy_process_group()
 
@@ -536,7 +560,7 @@ def train_transfusion():
 
 if __name__=="__main__":
     #train()
-    #train_transfusion()
+    train_transfusion()
     #train_transfusion_dummy()
     #train_mnist()
-    train_modality()
+    #train_modality()
