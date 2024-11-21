@@ -13,7 +13,7 @@ import torch.distributed as dist
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.distributed import DistributedSampler 
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.amp import autocast, GradScaler
+from torch.cuda.amp import autocast, GradScaler
 from torchinfo import summary
 import torch
 import torchvision.transforms as transforms
@@ -83,7 +83,7 @@ class JointDataset(Dataset):
         self.directory = directory
         self.filenames = [f for f in os.listdir(directory) if f.endswith('.pt')]
         self.transform = transforms.Compose([
-            transforms.CenterCrop((64, 64)),
+            transforms.CenterCrop((28, 28)),
             transforms.Lambda(lambda x: (x - x.min()) / (x.max() - x.min()))
         ])
 
@@ -497,7 +497,7 @@ def train_transfusion():
     # dataset =  AEdataset()
     # autoencoder_train_steps = 500
 
-    dim_latent = 64
+    dim_latent = 28
     # encoder = nn.Sequential(
     #     nn.Conv2d(1, 4, 3, padding = 1),
     #     nn.Conv2d(4, 8, 4, 2, 1),
@@ -549,14 +549,14 @@ def train_transfusion():
     model = Transfusion(
         num_text_tokens = 30000,
         dim_latent = dim_latent,
-        modality_default_shape = (64,64),
+        modality_default_shape = (28,28),
         # modality_encoder = encoder,
         # modality_decoder = decoder,
         add_pos_emb = True,
         modality_num_dim = 2,
         transformer = dict(
-            dim = 512,
-            depth = 4,
+            dim = 256,
+            depth = 8,
             dim_head = 32,
             heads = 8
         )
@@ -565,7 +565,7 @@ def train_transfusion():
     # if use_flex_attn: model = model.cuda()
     model = model.to(device)
     model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
-    optimizer = optim.Adam(model.parameters(), lr=3e-4)  
+    optimizer = optim.Adam(model.parameters(), lr=3e-7)  
     ema_model = model.module.create_ema().to(device)
 
     #optimizer = Adam(model.module.parameters_without_encoder_decoder(), lr = 3e-4)
@@ -621,32 +621,44 @@ def train_transfusion():
             if rank == 0 and step%1 == 0:
                 print("epoch step loss lr.............................: ",epoch, glob_step, loss.item())
                 wandb.log({"glob_step": glob_step, "train_loss": loss.item()})
-        if (epoch>=0 and epoch%1==0) and rank==0:
-            #if rank == 0 and step%100 == 0:
-            state['epoch']=epoch
-            state['step']=step
-            save_checkpoint_for_non_ddp(os.path.join(checkpoint_dir, f'non_ddp_checkpoint_{epoch}_{step}.pth'),state)
-            save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_{epoch}_{step}.pth'), state)
-            print(f'chepoint saved: checkpoint_{epoch}_{step}.pth')
-    
-
-            save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample"
-            one_multimodal_sample = model.module.sample(max_length = 20)
-            print_modality_sample(one_multimodal_sample)
-            if len(one_multimodal_sample) < 2:
-                continue
-            maybe_label, maybe_image, *_ = one_multimodal_sample
-            text = tokenizer.decode(maybe_label)
-            import re
-            clean_text = re.sub(r'[^a-zA-Z0-9]', '', text)
-            print("label:", clean_text)
-            filename = f'{save_path}/{epoch}_{step}_{clean_text}.png'
-            print(filename)
-            print(maybe_image[1][1].shape)
-            save_image(
-                maybe_image[1][1].cpu().clamp(min = 0., max = 1.),
-                filename
-            )
+       # if (epoch>=0 and epoch%1==0) and rank==0:
+            if rank == 0 and step%1000 == 0:
+                state['epoch']=epoch
+                state['step']=step
+               # save_checkpoint_for_non_ddp(os.path.join(checkpoint_dir, f'non_ddp_checkpoint_{epoch}_{step}.pth'),state)
+                save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_{epoch}_{step}.pth'), state)
+                print(f'chepoint saved: checkpoint_d1h256_{epoch}_{step}.pth')
+        
+                prime = torch.tensor([101, 1055, 2003, 6541, 7367, 7770, 5007, 1011, 2066, 14336, 1998, 6121, 3669, 11254, 1999, 1996, 13012, 20028, 1054, 1011, 1017, 2686, 2177, 1012, 1996, 3252, 2003, 5717, 1011, 8789, 1998, 3774, 1997, 2093, 2002, 18684, 23722, 27942, 10737, 1012, 1055, 1006, 1015, 1007, 2003, 20886, 1999, 1037, 2300, 1011, 2066, 10988, 2000, 2048, 5662, 1055, 1006, 1015, 1007, 13353, 1012, 2119, 1055, 1006, 1015, 1007, 1011, 1055, 1006, 1015, 1007, 5416, 10742, 2024, 1016, 1012, 5718, 1037, 1012, 102])
+                save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample"
+                multimodal = 1
+                text_only = 1
+                if multimodal: 
+                    one_multimodal_sample = model.module.sample(max_length = 20)
+                    print_modality_sample(one_multimodal_sample)
+                    if len(one_multimodal_sample) >= 2:
+                        #continue
+                        maybe_label, maybe_image, *_ = one_multimodal_sample
+                        import re
+                        text = tokenizer.decode(maybe_label)
+                        clean_text = re.sub(r'[^a-zA-Z0-9]', '', text)
+                        print("label:", clean_text)
+                        filename = f'{save_path}/{epoch}_{step}__d1h256_{clean_text[0:min(len(clean_text),10)]}.png'
+                        print(filename)
+                        save_image(
+                            maybe_image[1][1].cpu().clamp(min = 0., max = 1.),
+                            filename
+                        )
+     
+                if text_only:
+                    inp = torch.tensor([101, 1055, 2003, 6541, 7367, 7770, 50070]).to(device)
+                    prompt = inp[None, ...]
+                    maybe_label = model.module.generate_text_only(prompt ,100)
+                    #print(maybe_label)
+                    text = tokenizer.decode(maybe_label[0])
+                    orig = tokenizer.decode(prime)
+                    print("res:", text)
+                    print("orig:", orig)
 
     dist.destroy_process_group()
 
