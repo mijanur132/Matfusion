@@ -491,7 +491,6 @@ class MLPAxialPositions(Module):
             modality_shape = tensor(modality_shape)
 
         modality_shape = modality_shape.to(self.device)
-
         assert len(modality_shape) == self.num_dimensions
         dimensions = modality_shape.tolist()
 

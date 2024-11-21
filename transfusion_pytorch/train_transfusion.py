@@ -19,11 +19,17 @@ import torch
 import torchvision.transforms as transforms
 from torch.optim.lr_scheduler import LambdaLR
 from torchvision.datasets import MNIST
+from transformers import BertTokenizer
+from einops import rearrange
+from einops.layers.torch import Rearrange
+from torch.nn import Module
+import torch.nn.functional as F
+from torch.optim import Adam
+from tqdm import tqdm
+from torchvision.utils import save_image
 
-
-
+tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 torch.cuda.empty_cache()
-
 sys.path.insert(0,'/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch')
 
 from torch import nn, randint, randn, tensor, cuda
@@ -31,10 +37,21 @@ from torch import nn, randint, randn, tensor, cuda
 from transfusion_pytorch.transfusion import (
     Transfusion,
     flex_attention,
+    print_modality_sample,
     exists
 )
 
 
+class Normalize(Module):
+    def forward(self, x):
+        return F.normalize(x, dim = -1)
+def divisible_by(num, den):
+    return (num % den) == 0
+
+def cycle(iter_dl):
+    while True:
+        for batch in iter_dl:
+            yield batch
 
 def restore_checkpoint(ckpt_dir, state, device):
   if not os.path.exists(ckpt_dir):
@@ -61,20 +78,50 @@ def save_checkpoint_for_non_ddp(save_path,state):
 def save_checkpoint(ckpt_dir, state):
   torch.save(state,ckpt_dir)
 
-
-
 class JointDataset(Dataset):
     def __init__(self, directory):
         self.directory = directory
         self.filenames = [f for f in os.listdir(directory) if f.endswith('.pt')]
+        self.transform = transforms.Compose([
+            transforms.CenterCrop((64, 64)),
+            transforms.Lambda(lambda x: (x - x.min()) / (x.max() - x.min()))
+        ])
+
+    def __len__(self):
+        return len(self.filenames)
+    def __getitem__(self, idx):
+        file_path = os.path.join(self.directory, self.filenames[idx])
+        tok, im=torch.load(file_path)
+        token = torch.tensor(tok, dtype=torch.long)[0:10]
+        #print(token)
+        image = torch.from_numpy(im).float()[0]
+        image = self.transform(image)
+        return token,image
+
+
+class AEdataset(Dataset):
+    def __init__(self):
+        self.directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/comb_json_npy'
+        self.filenames = [f for f in os.listdir(self.directory) if f.endswith('.pt')]
+        self.transform = transforms.Compose([
+            transforms.CenterCrop((64, 64)),
+            transforms.Lambda(lambda x: (x - x.min()) / (x.max() - x.min()))
+        ])
+
     def __len__(self):
         return len(self.filenames)
     def __getitem__(self, idx):
         file_path = os.path.join(self.directory, self.filenames[idx])
         tok, im=torch.load(file_path)
         token = torch.tensor(tok, dtype=torch.long)
-        image = torch.from_numpy(im).float()
-        return token,image
+        zero_tensor = torch.tensor([0], dtype=torch.long)  # Create a tensor with a single zero
+        token = torch.cat((token, zero_tensor), dim=0)  # Concatenate the zero tensor to the token tensor
+        token = token.cuda().long()
+        # nt = normalized_tokens.squeeze()
+
+        im = torch.tensor(im, dtype=torch.float)[0]
+        im_t = self.transform(im)#.unsqueeze(0)
+        return token,im_t
 
 
 class TokenDataset(Dataset):
@@ -192,9 +239,6 @@ def init_distributed(rank,local_rank,ws,address,port):
 
   torch.cuda.set_device(local_rank)
   print("***************rank and world size*****************:",dist.get_rank(), dist.get_world_size()) ### most like wrong
-
-
-
 
 
 def train_modality():
@@ -450,24 +494,64 @@ def train_transfusion():
 
     joint_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/comb_json_npy'
     joint_dataloader, joint_sampler = create_joint_dataloader_ddp(joint_directory, batch_size=1)
-    # model = Transfusion(
-    #     num_text_tokens = 30000,
-    #     dim_latent = (128), # specify multiple latent dimensions, one for each modality
-    #     channel_first_latent = False,
-    #     #modality_default_shape = ((32,), (32,)),
-    #     transformer = dict(
-    #         dim = 512,
-    #         depth = 2,
-    #         use_flex_attn = False
-    #     )
-    # )
+    # dataset =  AEdataset()
+    # autoencoder_train_steps = 500
+
+    dim_latent = 64
+    # encoder = nn.Sequential(
+    #     nn.Conv2d(1, 4, 3, padding = 1),
+    #     nn.Conv2d(4, 8, 4, 2, 1),
+    #     nn.ReLU(),
+    #     nn.Dropout(0.05),
+    #     nn.Conv2d(8, dim_latent, 1),
+    #     Rearrange('b d ... -> b ... d'),
+    #     Normalize()
+    # ).to(device)
+
+    # decoder = nn.Sequential(
+    #     Rearrange('b ... d -> b d ...'),
+    #     nn.Conv2d(dim_latent, 8, 1),
+    #     nn.ReLU(),
+    #     nn.ConvTranspose2d(8, 4, 4, 2, 1),
+    #     nn.Conv2d(4, 1, 3, padding = 1),
+    # ).to(device)
+
+    # train autoencoder
+    print('training autoencoder')
+    # encoder_checkpoint = torch.load('/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mnist/encoder_checkpoint.pth')
+    # decoder_checkpoint = torch.load('/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mnist/decoder_checkpoint.pth')
+    # enc_new_state_dict = {k.replace('module.', ''): v for k, v in encoder_checkpoint.items()}
+    # dec_new_state_dict = {k.replace('module.', ''): v for k, v in decoder_checkpoint.items()}
+    # encoder.load_state_dict(enc_new_state_dict)
+    # decoder.load_state_dict(dec_new_state_dict)
+
+
+    # autoencoder_optimizer = Adam([*encoder.parameters(), *decoder.parameters()], lr = 3e-4)
+    # autoencoder_dataloader = DataLoader(dataset, batch_size = 1, shuffle = True)
+    # autoencoder_iter_dl = cycle(autoencoder_dataloader)
+    # with tqdm(total = autoencoder_train_steps) as pbar:
+    #     for _ in range(autoencoder_train_steps):
+    #         _, images = next(autoencoder_iter_dl)
+    #         images = images.cuda()
+    #         latents = encoder(images)
+    #         latents = latents.lerp(torch.randn_like(latents), torch.rand_like(latents) * 0.2) # add a bit of noise to latents
+    #         reconstructed = decoder(latents)
+    #         loss = F.mse_loss(images, reconstructed)
+    #         loss.backward()
+    #         pbar.set_description(f'loss: {loss.item():.5f}')
+    #         autoencoder_optimizer.step()
+    #         autoencoder_optimizer.zero_grad()
+    #         pbar.update()
+
+    # torch.save(encoder.state_dict(), '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mnist/encoder1_checkpoint.pth')
+    # torch.save(decoder.state_dict(), '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mnist/decoder1_checkpoint.pth')
 
     model = Transfusion(
         num_text_tokens = 30000,
-        dim_latent = 128,
-        #modality_default_shape = (14, 14),
-        #modality_encoder = encoder,
-        #modality_decoder = decoder,
+        dim_latent = dim_latent,
+        modality_default_shape = (64,64),
+        # modality_encoder = encoder,
+        # modality_decoder = decoder,
         add_pos_emb = True,
         modality_num_dim = 2,
         transformer = dict(
@@ -481,7 +565,11 @@ def train_transfusion():
     # if use_flex_attn: model = model.cuda()
     model = model.to(device)
     model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
-    optimizer = optim.Adam(model.parameters(), lr=10e-9)  # target lr
+    optimizer = optim.Adam(model.parameters(), lr=3e-4)  
+    ema_model = model.module.create_ema().to(device)
+
+    #optimizer = Adam(model.module.parameters_without_encoder_decoder(), lr = 3e-4)
+
     state = dict( model = model, step=0, epoch=0)
     checkpoint_dir = '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints'
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -489,24 +577,24 @@ def train_transfusion():
     checkpoint_files.sort(key=os.path.getmtime, reverse=True)
     initial_step = int(state['step'])
     initial_epoch = int(state['epoch'])    
-
-    # if checkpoint_files:
-    #     latest_checkpoint = checkpoint_files[0]
-    #     if rank==0:
-    #         print(f"latest checkpoint.................:{latest_checkpoint}")
-    #         checkpoint_dir_temp = os.path.join(checkpoint_dir, latest_checkpoint)
-    #         state = restore_checkpoint(checkpoint_dir_temp, state, device)
-    #         initial_epoch = int(state['epoch'])+1
-    #         initial_step = int(state['step'])+1
-    #         print("initial_epoch:", initial_epoch)
-    #     else:
-    #         latest_checkpoint = None
-    #         print("No checkpoint files found..........")
+    want_checkpt = 1
+    if checkpoint_files and want_checkpt:
+        latest_checkpoint = checkpoint_files[0]
+        if rank==0:
+            print(f"latest checkpoint.................:{latest_checkpoint}")
+            checkpoint_dir_temp = os.path.join(checkpoint_dir, latest_checkpoint)
+            state = restore_checkpoint(checkpoint_dir_temp, state, device)
+            initial_epoch = int(state['epoch'])+1
+            initial_step = int(state['step'])+1
+            print("initial_epoch:", initial_epoch)
+        else:
+            latest_checkpoint = None
+            print("No checkpoint files found..........")
 
     num_epochs=100
     scaler = GradScaler()
     glob_step = 0
-    accum_itr = 4
+    accum_itr = 1
     if rank==0:
         wandb.init( project="transfusion")
     print("dataloader length:", len(joint_dataloader))
@@ -521,39 +609,45 @@ def train_transfusion():
             normalized_tokens = normalized_tokens.cuda().long()
             nt = normalized_tokens.squeeze()
             images = _images.to(device)
-            im = images.squeeze()
-            inp = [[nt, (0, im)]]
+            im = images#.squeeze()
+            inp = [[nt,  im]]
             loss = model(inp, return_loss = True)#, modality_type = 1)
             loss = loss/accum_itr   #grad accumulation
             loss.backward()
-            #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0, norm_type=2)  #grad clipping
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
             if ((step+1)% accum_itr == 0 or (step+1) == len(joint_dataloader) ):
                 optimizer.step()
                 optimizer.zero_grad()
             if rank == 0 and step%1 == 0:
                 print("epoch step loss lr.............................: ",epoch, glob_step, loss.item())
                 wandb.log({"glob_step": glob_step, "train_loss": loss.item()})
-        if (epoch>0 and epoch%1==0) and rank==0:
+        if (epoch>=0 and epoch%1==0) and rank==0:
+            #if rank == 0 and step%100 == 0:
             state['epoch']=epoch
             state['step']=step
             save_checkpoint_for_non_ddp(os.path.join(checkpoint_dir, f'non_ddp_checkpoint_{epoch}_{step}.pth'),state)
             save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_{epoch}_{step}.pth'), state)
             print(f'chepoint saved: checkpoint_{epoch}_{step}.pth')
-      
-            one_multimodal_sample = model.sample(max_length = 96)
+    
+
+            save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample"
+            one_multimodal_sample = model.module.sample(max_length = 20)
             print_modality_sample(one_multimodal_sample)
             if len(one_multimodal_sample) < 2:
                 continue
-
             maybe_label, maybe_image, *_ = one_multimodal_sample
-            print("label:", maybe_label)
-            filename = f'{step}.{maybe_label[1].item()}.png'
-
+            text = tokenizer.decode(maybe_label)
+            import re
+            clean_text = re.sub(r'[^a-zA-Z0-9]', '', text)
+            print("label:", clean_text)
+            filename = f'{save_path}/{epoch}_{step}_{clean_text}.png'
+            print(filename)
+            print(maybe_image[1][1].shape)
             save_image(
-                maybe_image[1].cpu().clamp(min = 0., max = 1.),
-                str(results_folder / filename),
+                maybe_image[1][1].cpu().clamp(min = 0., max = 1.),
+                filename
             )
-            
+
     dist.destroy_process_group()
 
 
