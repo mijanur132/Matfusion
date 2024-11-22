@@ -556,7 +556,7 @@ def train_transfusion():
         modality_num_dim = 2,
         transformer = dict(
             dim = 256,
-            depth = 8,
+            depth = 4,
             dim_head = 32,
             heads = 8
         )
@@ -565,7 +565,7 @@ def train_transfusion():
     # if use_flex_attn: model = model.cuda()
     model = model.to(device)
     model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
-    optimizer = optim.Adam(model.parameters(), lr=3e-7)  
+    optimizer = optim.Adam(model.parameters(), lr=3e-4)  
     ema_model = model.module.create_ema().to(device)
 
     #optimizer = Adam(model.module.parameters_without_encoder_decoder(), lr = 3e-4)
@@ -622,12 +622,12 @@ def train_transfusion():
                 print("epoch step loss lr.............................: ",epoch, glob_step, loss.item())
                 wandb.log({"glob_step": glob_step, "train_loss": loss.item()})
        # if (epoch>=0 and epoch%1==0) and rank==0:
-            if rank == 0 and step%1000 == 0:
+            if rank == 0 and step>900 and step%1000 == 0:
                 state['epoch']=epoch
                 state['step']=step
                # save_checkpoint_for_non_ddp(os.path.join(checkpoint_dir, f'non_ddp_checkpoint_{epoch}_{step}.pth'),state)
                 save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_{epoch}_{step}.pth'), state)
-                print(f'chepoint saved: checkpoint_d1h256_{epoch}_{step}.pth')
+                print(f'chepoint saved: checkpoint_d4h256_{epoch}_{step}.pth')
         
                 prime = torch.tensor([101, 1055, 2003, 6541, 7367, 7770, 5007, 1011, 2066, 14336, 1998, 6121, 3669, 11254, 1999, 1996, 13012, 20028, 1054, 1011, 1017, 2686, 2177, 1012, 1996, 3252, 2003, 5717, 1011, 8789, 1998, 3774, 1997, 2093, 2002, 18684, 23722, 27942, 10737, 1012, 1055, 1006, 1015, 1007, 2003, 20886, 1999, 1037, 2300, 1011, 2066, 10988, 2000, 2048, 5662, 1055, 1006, 1015, 1007, 13353, 1012, 2119, 1055, 1006, 1015, 1007, 1011, 1055, 1006, 1015, 1007, 5416, 10742, 2024, 1016, 1012, 5718, 1037, 1012, 102])
                 save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample"
@@ -643,7 +643,7 @@ def train_transfusion():
                         text = tokenizer.decode(maybe_label)
                         clean_text = re.sub(r'[^a-zA-Z0-9]', '', text)
                         print("label:", clean_text)
-                        filename = f'{save_path}/{epoch}_{step}__d1h256_{clean_text[0:min(len(clean_text),10)]}.png'
+                        filename = f'{save_path}/{epoch}_{step}__d4h256_{clean_text[0:min(len(clean_text),10)]}.png'
                         print(filename)
                         save_image(
                             maybe_image[1][1].cpu().clamp(min = 0., max = 1.),
