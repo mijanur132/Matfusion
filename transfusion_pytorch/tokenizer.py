@@ -7,6 +7,7 @@ sys.path.append('..')
 import pandas as pd
 import numpy as np
 from argparse import ArgumentParser
+from collections import Counter
 
 from normalize_text import normalize
 
@@ -18,25 +19,13 @@ from transformers import (
     AutoTokenizer
 )
 
-directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/cif2txt'
-#directory = '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/temp'
-# Ensure the output directory exists
-output_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/token_json_matscibert'
-os.makedirs(output_directory, exist_ok=True)
-
 
 
 # if args.model_name == 'scibert':
-#     model_name = 'allenai/scibert_scivocab_uncased'
-#     to_normalize = False
-# elif args.model_name == 'matscibert':
 model_name = 'm3rg-iitd/matscibert'
-#     to_normalize = True
 # elif args.model_name == 'bert':
 #     model_name = 'bert-base-uncased'
-#     to_normalize = False
-# else:
-#     raise NotImplementedError
+
 
 model_revision = 'main'
 
@@ -65,7 +54,7 @@ def tokenize_function(examples):
     return result
 
 # Process each text file in the directory
-def tokenize(directory):
+def tokenize(directory, output_directory):
     for filename in os.listdir(directory):
         print(filename)
         if filename.endswith(".txt"):
@@ -101,9 +90,7 @@ def decode(directory):
             print(detokenized_data)
 
 
-import os
-import json
-from collections import Counter
+
 
 def count_tokens_in_directory(folder_path):
     token_counter = Counter()
@@ -132,12 +119,16 @@ def count_tokens_in_directory(folder_path):
 
 
 def main():
-    #tokenize(directory)
+    directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/cif2txt'
+    #directory = '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/temp'
+    output_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/token_json_matscibert'
+    os.makedirs(output_directory, exist_ok=True)
+    tokenize(directory, output_directory)
 
-    count_tokens_in_directory(output_directory)
+    #count_tokens_in_directory(output_directory)
 
     # dec_directory = "/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/token_json_matscibert"
-    # decode(dec_directory)
+    #decode(dec_directory)
 
 
 if __name__== '__main__':
