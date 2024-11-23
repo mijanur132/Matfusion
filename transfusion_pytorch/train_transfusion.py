@@ -492,7 +492,7 @@ def train_transfusion():
     device= torch.device('cuda', local_rank)
     print(f"Process {rank} using device: {device}")
 
-    joint_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/comb_json_npy'
+    joint_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/comb_json_npy_matscibert'
     joint_dataloader, joint_sampler = create_joint_dataloader_ddp(joint_directory, batch_size=1)
     # dataset =  AEdataset()
     # autoencoder_train_steps = 500
@@ -571,7 +571,7 @@ def train_transfusion():
     #optimizer = Adam(model.module.parameters_without_encoder_decoder(), lr = 3e-4)
 
     state = dict( model = model, step=0, epoch=0)
-    checkpoint_dir = '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints'
+    checkpoint_dir = '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/matsci_d4h256'
     os.makedirs(checkpoint_dir, exist_ok=True)
     checkpoint_files = glob.glob(os.path.join(checkpoint_dir, "checkpoint_*.pth"))
     checkpoint_files.sort(key=os.path.getmtime, reverse=True)
@@ -626,11 +626,11 @@ def train_transfusion():
                 state['epoch']=epoch
                 state['step']=step
                # save_checkpoint_for_non_ddp(os.path.join(checkpoint_dir, f'non_ddp_checkpoint_{epoch}_{step}.pth'),state)
-                save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_{epoch}_{step}.pth'), state)
+                save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_matsci_d4h256_{epoch}_{step}.pth'), state)
                 print(f'chepoint saved: checkpoint_d4h256_{epoch}_{step}.pth')
         
                 prime = torch.tensor([101, 1055, 2003, 6541, 7367, 7770, 5007, 1011, 2066, 14336, 1998, 6121, 3669, 11254, 1999, 1996, 13012, 20028, 1054, 1011, 1017, 2686, 2177, 1012, 1996, 3252, 2003, 5717, 1011, 8789, 1998, 3774, 1997, 2093, 2002, 18684, 23722, 27942, 10737, 1012, 1055, 1006, 1015, 1007, 2003, 20886, 1999, 1037, 2300, 1011, 2066, 10988, 2000, 2048, 5662, 1055, 1006, 1015, 1007, 13353, 1012, 2119, 1055, 1006, 1015, 1007, 1011, 1055, 1006, 1015, 1007, 5416, 10742, 2024, 1016, 1012, 5718, 1037, 1012, 102])
-                save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample"
+                save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/matsci_d4h256"
                 multimodal = 1
                 text_only = 1
                 if multimodal: 
@@ -643,7 +643,7 @@ def train_transfusion():
                         text = tokenizer.decode(maybe_label)
                         clean_text = re.sub(r'[^a-zA-Z0-9]', '', text)
                         print("label:", clean_text)
-                        filename = f'{save_path}/{epoch}_{step}__d4h256_{clean_text[0:min(len(clean_text),10)]}.png'
+                        filename = f'{save_path}/{epoch}_{step}__matsci_d4h256_{clean_text[0:min(len(clean_text),10)]}.png'
                         print(filename)
                         save_image(
                             maybe_image[1][1].cpu().clamp(min = 0., max = 1.),

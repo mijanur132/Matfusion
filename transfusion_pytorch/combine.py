@@ -4,9 +4,9 @@ import json
 import torch
 
 # Paths to the folders
-folder_A = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/token_json/'
+folder_A = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/token_json_matscibert/'
 folder_B = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/numpy_files/combined/'
-output_folder = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/comb_json_npy'
+output_folder = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/comb_json_npy_matscibert'
 os.makedirs(output_folder, exist_ok=True)
 
 # Obtain SLURM environment variables
@@ -52,11 +52,13 @@ for i, mp_number in enumerate(a_files_dict.keys()): #json
         y+=1
         filename_a = a_files_dict[mp_number]
         filepath_a = os.path.join(folder_A, filename_a)
+        print("fileA:",filepath_a)
         with open(filepath_a, 'r') as file:
             data = json.load(file)
             tokens = data['input_ids'][0]
-
+        print("fileA loaded")
         for filename_b in b_files_dict[mp_number]:
+            print("filenameb:", filename_b)
             filepath_b = os.path.join(folder_B, filename_b)
             npy_data = np.load(filepath_b)
             combined_data = (tokens, npy_data)
