@@ -92,8 +92,7 @@ class JointDataset(Dataset):
     def __getitem__(self, idx):
         file_path = os.path.join(self.directory, self.filenames[idx])
         tok, im=torch.load(file_path)
-        token = torch.tensor(tok, dtype=torch.long)[0:10]
-        #print(token)
+        token = torch.tensor(tok, dtype=torch.long)[0:50]
         image = torch.from_numpy(im).float()[0]
         image = self.transform(image)
         return token,image
@@ -547,7 +546,7 @@ def train_transfusion():
     # torch.save(decoder.state_dict(), '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mnist/decoder1_checkpoint.pth')
 
     model = Transfusion(
-        num_text_tokens = 30000,
+        num_text_tokens = 50000,
         dim_latent = dim_latent,
         modality_default_shape = (28,28),
         # modality_encoder = encoder,
@@ -622,7 +621,7 @@ def train_transfusion():
                 print("epoch step loss lr.............................: ",epoch, glob_step, loss.item())
                 wandb.log({"glob_step": glob_step, "train_loss": loss.item()})
        # if (epoch>=0 and epoch%1==0) and rank==0:
-            if rank == 0 and step>900 and step%1000 == 0:
+            if rank == 0  and step%500 == 0:
                 state['epoch']=epoch
                 state['step']=step
                # save_checkpoint_for_non_ddp(os.path.join(checkpoint_dir, f'non_ddp_checkpoint_{epoch}_{step}.pth'),state)
@@ -634,31 +633,33 @@ def train_transfusion():
                 multimodal = 1
                 text_only = 1
                 if multimodal: 
-                    one_multimodal_sample = model.module.sample(max_length = 20)
+                    one_multimodal_sample = model.module.sample(max_length = 500)
                     print_modality_sample(one_multimodal_sample)
                     if len(one_multimodal_sample) >= 2:
                         #continue
                         maybe_label, maybe_image, *_ = one_multimodal_sample
-                        import re
-                        text = tokenizer.decode(maybe_label)
-                        clean_text = re.sub(r'[^a-zA-Z0-9]', '', text)
-                        print("label:", clean_text)
-                        filename = f'{save_path}/{epoch}_{step}__matsci_d4h256_{clean_text[0:min(len(clean_text),10)]}.png'
-                        print(filename)
+                        # import re
+                        # text = tokenizer.decode(maybe_label)
+                        # clean_text = re.sub(r'[^a-zA-Z0-9]', '', text)
+                        # print("label:", clean_text)
+                        filename = f'{save_path}/{epoch}_{step}__matsci_d4h256_.png'
                         save_image(
                             maybe_image[1][1].cpu().clamp(min = 0., max = 1.),
                             filename
                         )
-     
-                if text_only:
-                    inp = torch.tensor([101, 1055, 2003, 6541, 7367, 7770, 50070]).to(device)
-                    prompt = inp[None, ...]
-                    maybe_label = model.module.generate_text_only(prompt ,100)
-                    #print(maybe_label)
-                    text = tokenizer.decode(maybe_label[0])
-                    orig = tokenizer.decode(prime)
-                    print("res:", text)
-                    print("orig:", orig)
+                        filename = f'{save_path}/{epoch}_{step}__matsci_d4h256_.json'
+                        with open(filename, 'w', encoding='utf-8') as json_file:
+                            json.dump(maybe_label.tolist(), json_file)
+                
+                # if text_only:
+                #     inp = torch.tensor([101, 1055, 2003, 6541, 7367, 7770, 50070]).to(device)
+                #     prompt = inp[None, ...]
+                #     maybe_label = model.module.generate_text_only(prompt ,100)
+                #     #print(maybe_label)
+                #     text = tokenizer.decode(maybe_label[0])
+                #     orig = tokenizer.decode(prime)
+                #     print("res:", text)
+                #     print("orig:", orig)
 
     dist.destroy_process_group()
 

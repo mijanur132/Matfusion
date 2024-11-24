@@ -55,7 +55,8 @@ for i, mp_number in enumerate(a_files_dict.keys()): #json
         print("fileA:",filepath_a)
         with open(filepath_a, 'r') as file:
             data = json.load(file)
-            tokens = data['input_ids'][0]
+            tokens = data['input_ids']
+            print(len(tokens))
         print("fileA loaded")
         for filename_b in b_files_dict[mp_number]:
             print("filenameb:", filename_b)
