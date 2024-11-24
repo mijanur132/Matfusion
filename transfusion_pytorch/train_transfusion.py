@@ -27,6 +27,8 @@ import torch.nn.functional as F
 from torch.optim import Adam
 from tqdm import tqdm
 from torchvision.utils import save_image
+import argparse
+
 
 tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 torch.cuda.empty_cache()
@@ -79,11 +81,11 @@ def save_checkpoint(ckpt_dir, state):
   torch.save(state,ckpt_dir)
 
 class JointDataset(Dataset):
-    def __init__(self, directory):
+    def __init__(self, directory, dim_latent):
         self.directory = directory
         self.filenames = [f for f in os.listdir(directory) if f.endswith('.pt')]
         self.transform = transforms.Compose([
-            transforms.CenterCrop((28, 28)),
+            transforms.CenterCrop((dim_latent, dim_latent)),
             transforms.Lambda(lambda x: (x - x.min()) / (x.max() - x.min()))
         ])
 
@@ -180,8 +182,8 @@ def create_image_dataloader_ddp(directory, batch_size=1, shuffle=True):
     dataloader = DataLoader(dataset, batch_size=batch_size, sampler = sampler, shuffle=False, num_workers=4, pin_memory=True)
     return dataloader, sampler
 
-def create_joint_dataloader_ddp(directory, batch_size=1, shuffle=True):
-    dataset = JointDataset(directory)
+def create_joint_dataloader_ddp(directory, dim_latent = 28, batch_size=1, shuffle=True):
+    dataset = JointDataset(directory, dim_latent)
     sampler = DistributedSampler(dataset, shuffle = shuffle)
     dataloader = DataLoader(dataset, batch_size=batch_size, sampler = sampler, shuffle=False, num_workers=4, pin_memory=True)
     return dataloader, sampler
@@ -468,7 +470,8 @@ def train_mnist():
 
     dist.destroy_process_group()
 
-def train_transfusion():
+def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
+    dim_latent, mod_shape, xdim, xdepth = _dim_latent, _mod_shape, _xdim, _xdepth
     x=1  #so that code does not go into slurm_ntasks loop while running without slurm. Remove this before submitting to slurm. 
     if x and "SLURM_NTASKS" in os.environ:
         print("should not come here")
@@ -492,11 +495,11 @@ def train_transfusion():
     print(f"Process {rank} using device: {device}")
 
     joint_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/comb_json_npy_matscibert'
-    joint_dataloader, joint_sampler = create_joint_dataloader_ddp(joint_directory, batch_size=1)
+    joint_dataloader, joint_sampler = create_joint_dataloader_ddp(joint_directory, dim_latent, batch_size=1)
     # dataset =  AEdataset()
     # autoencoder_train_steps = 500
 
-    dim_latent = 28
+    
     # encoder = nn.Sequential(
     #     nn.Conv2d(1, 4, 3, padding = 1),
     #     nn.Conv2d(4, 8, 4, 2, 1),
@@ -544,18 +547,18 @@ def train_transfusion():
 
     # torch.save(encoder.state_dict(), '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mnist/encoder1_checkpoint.pth')
     # torch.save(decoder.state_dict(), '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mnist/decoder1_checkpoint.pth')
-
+ 
     model = Transfusion(
         num_text_tokens = 50000,
         dim_latent = dim_latent,
-        modality_default_shape = (28,28),
+        modality_default_shape = (mod_shape,mod_shape),
         # modality_encoder = encoder,
         # modality_decoder = decoder,
         add_pos_emb = True,
         modality_num_dim = 2,
         transformer = dict(
-            dim = 256,
-            depth = 4,
+            dim = xdim,
+            depth = xdepth,
             dim_head = 32,
             heads = 8
         )
@@ -570,7 +573,7 @@ def train_transfusion():
     #optimizer = Adam(model.module.parameters_without_encoder_decoder(), lr = 3e-4)
 
     state = dict( model = model, step=0, epoch=0)
-    checkpoint_dir = '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/matsci_d4h256'
+    checkpoint_dir = f'/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/matsci_{dim_latent}_{mod_shape}_{xdim}_{xdepth}'
     os.makedirs(checkpoint_dir, exist_ok=True)
     checkpoint_files = glob.glob(os.path.join(checkpoint_dir, "checkpoint_*.pth"))
     checkpoint_files.sort(key=os.path.getmtime, reverse=True)
@@ -625,11 +628,12 @@ def train_transfusion():
                 state['epoch']=epoch
                 state['step']=step
                # save_checkpoint_for_non_ddp(os.path.join(checkpoint_dir, f'non_ddp_checkpoint_{epoch}_{step}.pth'),state)
-                save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_matsci_d4h256_{epoch}_{step}.pth'), state)
-                print(f'chepoint saved: checkpoint_d4h256_{epoch}_{step}.pth')
+                save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_matsci_{epoch}_{step}.pth'), state)
+                print(f'chepoint saved: checkpoint_{epoch}_{step}.pth')
         
                 prime = torch.tensor([101, 1055, 2003, 6541, 7367, 7770, 5007, 1011, 2066, 14336, 1998, 6121, 3669, 11254, 1999, 1996, 13012, 20028, 1054, 1011, 1017, 2686, 2177, 1012, 1996, 3252, 2003, 5717, 1011, 8789, 1998, 3774, 1997, 2093, 2002, 18684, 23722, 27942, 10737, 1012, 1055, 1006, 1015, 1007, 2003, 20886, 1999, 1037, 2300, 1011, 2066, 10988, 2000, 2048, 5662, 1055, 1006, 1015, 1007, 13353, 1012, 2119, 1055, 1006, 1015, 1007, 1011, 1055, 1006, 1015, 1007, 5416, 10742, 2024, 1016, 1012, 5718, 1037, 1012, 102])
-                save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/matsci_d4h256"
+                save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/matsci_{dim_latent}_{mod_shape}_{xdim}_{xdepth}/"
+                os.makedirs(save_path, exist_ok=True)
                 multimodal = 1
                 text_only = 1
                 if multimodal: 
@@ -642,12 +646,12 @@ def train_transfusion():
                         # text = tokenizer.decode(maybe_label)
                         # clean_text = re.sub(r'[^a-zA-Z0-9]', '', text)
                         # print("label:", clean_text)
-                        filename = f'{save_path}/{epoch}_{step}__matsci_d4h256_.png'
+                        filename = f'{save_path}/{epoch}_{step}_.png'
                         save_image(
                             maybe_image[1][1].cpu().clamp(min = 0., max = 1.),
                             filename
                         )
-                        filename = f'{save_path}/{epoch}_{step}__matsci_d4h256_.json'
+                        filename = f'{save_path}/{epoch}_{step}_.json'
                         with open(filename, 'w', encoding='utf-8') as json_file:
                             json.dump(maybe_label.tolist(), json_file)
                 
@@ -667,7 +671,20 @@ def train_transfusion():
 
 if __name__=="__main__":
     #train()
-    train_transfusion()
+    parser = argparse.ArgumentParser(description="Process some integers.")
+
+    parser.add_argument('--dim_latent', type=int, required=True, help='Dimension of the latent space')
+    parser.add_argument('--mod_shape', type=int, required=True, help='Model shape as a list of integers')
+    parser.add_argument('--xdim', type=int, required=True, help='Dimension x')
+    parser.add_argument('--xdepth', type=int, required=True, help='Depth x')
+    
+
+    args = parser.parse_args()
+    dim_latent, mod_shape, xdim, xdepth = args.dim_latent, args.mod_shape, args.xdim, args.xdepth
+    print(dim_latent, mod_shape, xdim, xdepth)
+
+
+    train_transfusion(dim_latent, mod_shape, xdim, xdepth)
     #train_transfusion_dummy()
     #train_mnist()
     #train_modality()

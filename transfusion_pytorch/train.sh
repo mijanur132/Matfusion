@@ -55,9 +55,26 @@ export TORCH_EXTENSIONS_DIR="/lustre/orion/stf218/proj-shared/brave/transfusion-
 export PYTHONUNBUFFERED=1   #for immeideate printing.
 
 
+# Usage function to display help
+usage() {
+    echo "Usage: $0 --dim_latent <int> --mod_shape <space-separated integers> --xdim <int> --xdepth <int>"
+    exit 1
+}
 
+# Check if the number of arguments passed is correct
+if [ "$#" -ne 8 ]; then
+    usage
+fi
+
+DIM_LATENT=$2
+MOD_SHAPE="$4"
+XDIM=$6
+XDEPTH=$8
+
+# Call the Python script with the arguments
+srun --nodes=1 --ntasks=8 python train_transfusion.py --dim_latent $DIM_LATENT --mod_shape $MOD_SHAPE --xdim $XDIM --xdepth $XDEPTH
 #srun --nodes=1 --ntasks=8 python inference_transfusion.py
-srun --nodes=1 --ntasks=8 python train_transfusion.py
+#srun --nodes=1 --ntasks=8 python train_transfusion.py --dim_latent 28 --mod_shape 28 --xdim 256 --xdepth 4
 
 
 

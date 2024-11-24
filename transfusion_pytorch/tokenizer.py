@@ -85,7 +85,7 @@ def decode(directory):
             file_path = os.path.join(directory, filename)
             with open(file_path, 'r') as file:
                 token_data = json.load(file)# ['input_ids']
-            print(token_data)
+
             detokenized_data =   tokenizer.decode(token_data, skip_special_tokens=True)
             print(detokenized_data)
 
@@ -128,7 +128,7 @@ def main():
     #count_tokens_in_directory(output_directory)
 
     # dec_directory = "/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/token_json_matscibert"
-    dec_directory = "/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/matsci_d4h256"
+    dec_directory = "/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/matsci_28_28_256_4"
     decode(dec_directory)
 
 
