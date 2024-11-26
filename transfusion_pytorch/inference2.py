@@ -600,72 +600,68 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
     if rank==0:
         wandb.init( project="transfusion")
     print("dataloader length:", len(joint_dataloader))
-    for epoch in range(initial_epoch, num_epochs):
-        print("epoch:",epoch)
-        joint_sampler.set_epoch (epoch)
-        optimizer.zero_grad()
-        for step, (_tokens,_images) in enumerate(joint_dataloader):
-            glob_step+=1
-            zeros_tensor = torch.zeros(1, 1)  #batchsize
-            normalized_tokens = torch.cat((zeros_tensor,_tokens), dim = 1)
-            normalized_tokens = normalized_tokens.cuda().long()
-            nt = normalized_tokens.squeeze()
-            images = _images.to(device)
-            im = images#.squeeze()
-            inp = [[nt,  im]]
-            loss = model(inp, return_loss = True)#, modality_type = 1)
-            loss = loss/accum_itr   #grad accumulation
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
-            if ((step+1)% accum_itr == 0 or (step+1) == len(joint_dataloader) ):
-                optimizer.step()
-                optimizer.zero_grad()
-            if rank == 0 and step%1 == 0:
-                print("epoch step loss lr.............................: ",epoch, glob_step, loss.item())
-                wandb.log({"glob_step": glob_step, "train_loss": loss.item()})
+    # for epoch in range(initial_epoch, num_epochs):
+    #     print("epoch:",epoch)
+    #     joint_sampler.set_epoch (epoch)
+    #     optimizer.zero_grad()
+        # for step, (_tokens,_images) in enumerate(joint_dataloader):
+        #     glob_step+=1
+        #     zeros_tensor = torch.zeros(1, 1)  #batchsize
+        #     normalized_tokens = torch.cat((zeros_tensor,_tokens), dim = 1)
+        #     normalized_tokens = normalized_tokens.cuda().long()
+        #     nt = normalized_tokens.squeeze()
+        #     images = _images.to(device)
+        #     im = images#.squeeze()
+        #     inp = [[nt,  im]]
+        #     loss = model(inp, return_loss = True)#, modality_type = 1)
+        #     loss = loss/accum_itr   #grad accumulation
+        #     loss.backward()
+        #     torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+        #     if ((step+1)% accum_itr == 0 or (step+1) == len(joint_dataloader) ):
+        #         optimizer.step()
+        #         optimizer.zero_grad()
+        #     if rank == 0 and step%1 == 0:
+        #         print("epoch step loss lr.............................: ",epoch, glob_step, loss.item())
+        #         wandb.log({"glob_step": glob_step, "train_loss": loss.item()})
        # if (epoch>=0 and epoch%1==0) and rank==0:
-            if rank == 0  and step%500 == 0:
-                state['epoch']=epoch
-                state['step']=step
-               # save_checkpoint_for_non_ddp(os.path.join(checkpoint_dir, f'non_ddp_checkpoint_{epoch}_{step}.pth'),state)
-                save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_matsci_{epoch}_{step}.pth'), state)
-                print(f'chepoint saved: checkpoint_{epoch}_{step}.pth')
+    if rank == 0:
+        # state['epoch']=epoch
+        # state['step']=step
+        # save_checkpoint_for_non_ddp(os.path.join(checkpoint_dir, f'non_ddp_checkpoint_{epoch}_{step}.pth'),state)
+        # save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_matsci_{epoch}_{step}.pth'), state)
+        # print(f'chepoint saved: checkpoint_{epoch}_{step}.pth')
 
-                prime = torch.tensor([102, 3488, 165, 21232, 8724, 7908, 137, 6592, 2632, 121, 111, 13879, 264, 579, 239, 30119, 1630, 583, 205, 3488, 145, 158, 546, 165, 23152, 121, 106, 2160, 579, 11853, 13879, 5840, 147, 4834, 3552, 3488, 145, 158, 546, 6448, 205, 355, 3488, 145, 158, 546, 579, 3488, 145, 158, 546, 3817, 8546, 220, 305, 205, 3291, 106, 205, 103])
-                #prime = torch.tensor([101, 1055, 2003, 6541, 7367, 7770, 5007, 1011, 2066, 14336, 1998, 6121, 3669, 11254, 1999, 1996, 13012, 20028, 1054, 1011, 1017, 2686, 2177, 1012, 1996, 3252, 2003, 5717, 1011, 8789, 1998, 3774, 1997, 2093, 2002, 18684, 23722, 27942, 10737, 1012, 1055, 1006, 1015, 1007, 2003, 20886, 1999, 1037, 2300, 1011, 2066, 10988, 2000, 2048, 5662, 1055, 1006, 1015, 1007, 13353, 1012, 2119, 1055, 1006, 1015, 1007, 1011, 1055, 1006, 1015, 1007, 5416, 10742, 2024, 1016, 1012, 5718, 1037, 1012, 102])
-                save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/matsci_{dim_latent}_{mod_shape}_{xdim}_{xdepth}/"
-                os.makedirs(save_path, exist_ok=True)
-                multimodal = 1
-                text_only = 1
-                if multimodal: 
-                    one_multimodal_sample = model.module.sample(max_length = 500)
-                    print_modality_sample(one_multimodal_sample)
-                    if len(one_multimodal_sample) >= 2:
-                        #continue
-                        maybe_label, maybe_image, *_ = one_multimodal_sample
-                        # import re
-                        # text = tokenizer.decode(maybe_label)
-                        # clean_text = re.sub(r'[^a-zA-Z0-9]', '', text)
-                        # print("label:", clean_text)
-                        filename = f'{save_path}/{epoch}_{step}_.png'
-                        save_image(
-                            maybe_image[1][1].cpu().clamp(min = 0., max = 1.),
-                            filename
-                        )
-                        filename = f'{save_path}/{epoch}_{step}_.json'
-                        with open(filename, 'w', encoding='utf-8') as json_file:
-                            json.dump(maybe_label.tolist(), json_file)
-                
-                # if text_only:
-                #     inp = torch.tensor([101, 1055, 2003, 6541, 7367, 7770, 50070]).to(device)
-                #     prompt = inp[None, ...]
-                #     maybe_label = model.module.generate_text_only(prompt ,100)
-                #     #print(maybe_label)
-                #     text = tokenizer.decode(maybe_label[0])
-                #     orig = tokenizer.decode(prime)
-                #     print("res:", text)
-                #     print("orig:", orig)
-
+        #prime = torch.tensor([102, 3488, 165, 21232, 8724, 7908, 137, 6592, 2632, 121, 111, 13879, 264, 579, 239, 30119, 1630, 583, 205, 3488, 145, 158, 546, 165, 23152, 121, 106, 2160, 579, 11853, 13879, 5840, 147, 4834, 3552, 3488, 145, 158, 546, 6448, 205, 355, 3488, 145, 158, 546, 579, 3488, 145, 158, 546, 3817, 8546, 220, 305, 205, 3291, 106, 205, 103])
+        #prime = torch.tensor([101, 1055, 2003, 6541, 7367, 7770, 5007, 1011, 2066, 14336, 1998, 6121, 3669, 11254, 1999, 1996, 13012, 20028, 1054, 1011, 1017, 2686, 2177, 1012, 1996, 3252, 2003, 5717, 1011, 8789, 1998, 3774, 1997, 2093, 2002, 18684, 23722, 27942, 10737, 1012, 1055, 1006, 1015, 1007, 2003, 20886, 1999, 1037, 2300, 1011, 2066, 10988, 2000, 2048, 5662, 1055, 1006, 1015, 1007, 13353, 1012, 2119, 1055, 1006, 1015, 1007, 1011, 1055, 1006, 1015, 1007, 5416, 10742, 2024, 1016, 1012, 5718, 1037, 1012, 102])
+        prime = torch.tensor([102, 6901, 30111, 165, 2547, 585, 422, 8863, 7030, 7908, 137, 6592, 2632, 121, 111, 13879, 5949, 579, 239, 30119, 1630, 583, 205, 6901, 145, 158, 546, 165, 23152, 147, 2781, 3552, 146, 145, 158, 546, 6448, 147, 592, 106, 4434, 131, 11881, 137, 3555, 579, 6404, 6901, 30111, 30142, 26376, 25280, 205, 111, 11881, 579, 6404, 26376, 25280, 220, 302, 18212, 119, 205, 355, 6901, 145, 158, 546, 579, 146, 145, 158, 546, 3817, 8546, 220, 170, 205, 2532, 106, 205, 146, 145, 158, 546, 165, 23152, 147, 2781, 3552, 6901, 145, 158, 546, 6448, 147, 592, 106, 4434, 131, 11881, 137, 3555, 579, 6404, 6604, 30122, 30142, 26376, 25280, 205, 111, 11881, 579, 6404, 26376, 25280, 220, 302, 18212, 119, 205, 103, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/matsci_{dim_latent}_{mod_shape}_{xdim}_{xdepth}/"
+        os.makedirs(save_path, exist_ok=True)
+        multimodal = 1
+        text_only = 1
+        if multimodal: 
+            one_multimodal_sample = model.module.sample(prime, max_length = 1024)
+            print_modality_sample(one_multimodal_sample)
+            if len(one_multimodal_sample) >= 2:
+                maybe_label, maybe_image, *_ = one_multimodal_sample
+                filename = f'{save_path}/inf.png'
+                # save_image(
+                #     maybe_image[1][1].cpu().clamp(min = 0., max = 1.),
+                #     filename
+                # )
+                filename = f'{save_path}/inf_mp2828.pt'
+                torch.save(one_multimodal_sample, filename)
+                # with open(filename, 'w', encoding='utf-8') as json_file:
+                #     json.dump(maybe_label.tolist(), json_file)
+        
+        if text_only:
+            inp = torch.tensor([102, 6901, 30111, 165, 2547, 585, 422, 8863, 7030, 7908]).to(device)
+            prompt = inp[None, ...]
+            maybe_label = model.module.generate_text_only(prompt ,100)
+            filename = f'{save_path}/text_inf_mp2828.json'
+            with open(filename, 'w', encoding='utf-8') as json_file:
+                json.dump(maybe_label.tolist(), json_file)
+    
+                   
     dist.destroy_process_group()
 
 
@@ -674,10 +670,10 @@ if __name__=="__main__":
     #train()
     parser = argparse.ArgumentParser(description="Process some integers.")
 
-    parser.add_argument('--dim_latent', type=int, required=True, help='Dimension of the latent space')
-    parser.add_argument('--mod_shape', type=int, required=True, help='Model shape as a list of integers')
-    parser.add_argument('--xdim', type=int, required=True, help='Dimension x')
-    parser.add_argument('--xdepth', type=int, required=True, help='Depth x')
+    parser.add_argument('--dim_latent', type=int, required=False, default = 56, help='Dimension of the latent space')
+    parser.add_argument('--mod_shape', type=int, required=False, default = 56, help='Model shape as a list of integers')
+    parser.add_argument('--xdim', type=int, required=False, default = 256, help='Dimension x')
+    parser.add_argument('--xdepth', type=int, required=False, default = 8, help='Depth x')
     
 
     args = parser.parse_args()
