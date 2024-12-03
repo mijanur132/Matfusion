@@ -61,15 +61,23 @@ usage() {
     exit 1
 }
 
-# Check if the number of arguments passed is correct
-if [ "$#" -ne 8 ]; then
-    usage
-fi
+# Set default values
+DIM_LATENT=128
+MOD_SHAPE="64 64"
+XDIM=256
+XDEPTH=4
 
-DIM_LATENT=$2
-MOD_SHAPE="$4"
-XDIM=$6
-XDEPTH=$8
+# Parse arguments and update default values if provided
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --dim_latent) DIM_LATENT="$2"; shift ;;
+        --mod_shape) MOD_SHAPE="$2"; shift ;;
+        --xdim) XDIM="$2"; shift ;;
+        --xdepth) XDEPTH="$2"; shift ;;
+        *) usage ;; # Unknown option
+    esac
+    shift
+done
 
 # Call the Python script with the arguments
 srun --nodes=1 --ntasks=8 python train_transfusion.py --dim_latent $DIM_LATENT --mod_shape $MOD_SHAPE --xdim $XDIM --xdepth $XDEPTH
