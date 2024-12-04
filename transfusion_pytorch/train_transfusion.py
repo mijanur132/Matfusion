@@ -69,6 +69,10 @@ def restore_checkpoint(ckpt_dir, state, device):
 def save_checkpoint(ckpt_dir, state):
   torch.save(state,ckpt_dir)
 
+def collate_fn(data):
+    data = [*map(list, data)]
+    return data
+
 class JointDataset(Dataset):
     def __init__(self, directory, dim_latent):
         self.directory = directory
@@ -84,33 +88,33 @@ class JointDataset(Dataset):
         file_path = os.path.join(self.directory, self.filenames[idx])
         label, im=torch.load(file_path)
         label = torch.tensor(label, dtype=torch.long)#[0:50]
-        image = torch.from_numpy(im).float()[0]
+        image = torch.from_numpy(im).float()#.unsqueeze(0)
         image = self.transform(image)
-        return ([label,image])
+        return image, label
 
-class AEdataset(Dataset):
-    def __init__(self):
-        self.directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/comb_json_npy'
-        self.filenames = [f for f in os.listdir(self.directory) if f.endswith('.pt')]
-        self.transform = transforms.Compose([
-            transforms.CenterCrop((64, 64)),
-            transforms.Lambda(lambda x: (x - x.min()) / (x.max() - x.min()))
-        ])
+# class AEdataset(Dataset):
+#     def __init__(self):
+#         self.directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/comb_sg_npy'
+#         self.filenames = [f for f in os.listdir(self.directory) if f.endswith('.pt')]
+#         self.transform = transforms.Compose([
+#             transforms.CenterCrop((64, 64)),
+#             transforms.Lambda(lambda x: (x - x.min()) / (x.max() - x.min()))
+#         ])
 
-    def __len__(self):
-        return len(self.filenames)
-    def __getitem__(self, idx):
-        file_path = os.path.join(self.directory, self.filenames[idx])
-        tok, im=torch.load(file_path)
-        token = torch.tensor(tok, dtype=torch.long)
-        zero_tensor = torch.tensor([0], dtype=torch.long)  # Create a tensor with a single zero
-        token = torch.cat((token, zero_tensor), dim=0)  # Concatenate the zero tensor to the token tensor
-        token = token.cuda().long()
-        # nt = normalized_tokens.squeeze()
+#     def __len__(self):
+#         return len(self.filenames)
+#     def __getitem__(self, idx):
+#         file_path = os.path.join(self.directory, self.filenames[idx])
+#         tok, im=torch.load(file_path)
+#         token = torch.tensor(tok, dtype=torch.long)
+#         zero_tensor = torch.tensor([0], dtype=torch.long)  # Create a tensor with a single zero
+#         token = torch.cat((token, zero_tensor), dim=0)  # Concatenate the zero tensor to the token tensor
+#         token = token.cuda().long()
+#         # nt = normalized_tokens.squeeze()
 
-        im = torch.tensor(im, dtype=torch.float)[0]
-        im_t = self.transform(im)#.unsqueeze(0)
-        return token,im_t
+#         im = torch.tensor(im, dtype=torch.float)[0]
+#         im_t = self.transform(im)#.unsqueeze(0)
+#         return token,im_t
 
 def create_dataloader_ddp(directory, batch_size=1, shuffle=True):
     dataset = TokenDataset(directory)
@@ -127,7 +131,7 @@ def create_image_dataloader_ddp(directory, batch_size=1, shuffle=True):
 def create_joint_dataloader_ddp(directory, dim_latent = 28, batch_size=1, shuffle=True):
     dataset = JointDataset(directory, dim_latent)
     sampler = DistributedSampler(dataset, shuffle = shuffle)
-    dataloader = DataLoader(dataset, batch_size=batch_size, sampler = sampler, shuffle=False, num_workers=4, pin_memory=True)
+    dataloader = DataLoader(dataset, batch_size=batch_size, sampler = sampler, shuffle=False, num_workers=4, pin_memory=True, collate_fn=collate_fn)
     return dataloader, sampler
 
 def init_distributed(rank,local_rank,ws,address,port):
@@ -164,11 +168,11 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
     joint_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/comb_sg_npy'
     joint_dataloader, joint_sampler = create_joint_dataloader_ddp(joint_directory, dim_latent, batch_size=16)
     iter_dl = cycle(joint_dataloader)
-    dataset =  AEdataset()
+    #dataset =  AEdataset()
     autoencoder_train_steps = 500
 
     encoder = nn.Sequential(
-        nn.Conv2d(1, 4, 3, padding = 1),
+        nn.Conv2d(3, 4, 3, padding = 1),
         nn.Conv2d(4, 8, 4, 2, 1),
         nn.ReLU(),
         nn.Dropout(0.05),
@@ -199,10 +203,10 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
         print('training autoencoder')
         autoencoder_optimizer = Adam([*encoder.parameters(), *decoder.parameters()], lr = 3e-4)
         autoencoder_dataloader = DataLoader(dataset, batch_size = 1, shuffle = True)
-        autoencoder_iter_dl = cycle(autoencoder_dataloader)
+        autoencoder_iter_dl = cycle(joint_dataloader)
         with tqdm(total = autoencoder_train_steps) as pbar:
             for _ in range(autoencoder_train_steps):
-                _, images = next(autoencoder_iter_dl)
+                images, _ = next(autoencoder_iter_dl)
                 images = images.cuda()
                 latents = encoder(images)
                 latents = latents.lerp(torch.randn_like(latents), torch.rand_like(latents) * 0.2) # add a bit of noise to latents
@@ -274,8 +278,9 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
         for step in range(len(joint_dataloader)):
             glob_step+=1
             data = next(iter_dl)
-            print(data)
-            loss = model(data, return_loss = True)#, modality_type = 1)
+            print(len(data))
+            print(data[1])
+            loss = model(data)#, return_loss = True)#, modality_type = 1)
             loss = loss/accum_itr   #grad accumulation
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
