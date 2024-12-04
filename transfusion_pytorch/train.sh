@@ -62,7 +62,7 @@ usage() {
 }
 
 # Set default values
-DIM_LATENT=128
+DIM_LATENT=56
 MOD_SHAPE=28
 XDIM=256
 XDEPTH=4

@@ -43,7 +43,6 @@ from transfusion_pytorch.transfusion import (
     exists
 )
 
-
 class Normalize(Module):
     def forward(self, x):
         return F.normalize(x, dim = -1)
@@ -83,12 +82,11 @@ class JointDataset(Dataset):
         return len(self.filenames)
     def __getitem__(self, idx):
         file_path = os.path.join(self.directory, self.filenames[idx])
-        tok, im=torch.load(file_path)
-        token = torch.tensor(tok, dtype=torch.long)[0:50]
+        label, im=torch.load(file_path)
+        label = torch.tensor(label, dtype=torch.long)#[0:50]
         image = torch.from_numpy(im).float()[0]
         image = self.transform(image)
-        return token,image
-
+        return ([label,image])
 
 class AEdataset(Dataset):
     def __init__(self):
@@ -113,8 +111,6 @@ class AEdataset(Dataset):
         im = torch.tensor(im, dtype=torch.float)[0]
         im_t = self.transform(im)#.unsqueeze(0)
         return token,im_t
-
-
 
 def create_dataloader_ddp(directory, batch_size=1, shuffle=True):
     dataset = TokenDataset(directory)
@@ -141,7 +137,6 @@ def init_distributed(rank,local_rank,ws,address,port):
   print("***************rank and world size*****************:",dist.get_rank(), dist.get_world_size()) ### most like wrong
 
 
-
 def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
     dim_latent, mod_shape, xdim, xdepth = _dim_latent, _mod_shape, _xdim, _xdepth
     x=1  #so that code does not go into slurm_ntasks loop while running without slurm. Remove this before submitting to slurm. 
@@ -166,12 +161,12 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
     device= torch.device('cuda', local_rank)
     print(f"Process {rank} using device: {device}")
 
-    joint_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/comb_json_npy_matscibert'
-    joint_dataloader, joint_sampler = create_joint_dataloader_ddp(joint_directory, dim_latent, batch_size=1)
+    joint_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/comb_sg_npy'
+    joint_dataloader, joint_sampler = create_joint_dataloader_ddp(joint_directory, dim_latent, batch_size=16)
+    iter_dl = cycle(joint_dataloader)
     dataset =  AEdataset()
     autoencoder_train_steps = 500
 
-    
     encoder = nn.Sequential(
         nn.Conv2d(1, 4, 3, padding = 1),
         nn.Conv2d(4, 8, 4, 2, 1),
@@ -190,36 +185,38 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
         nn.Conv2d(4, 1, 3, padding = 1),
     ).to(device)
 
+
     # train autoencoder
-    print('training autoencoder')
-    encoder_checkpoint = torch.load('/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mnist/encoder1_checkpoint.pth')
-    decoder_checkpoint = torch.load('/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mnist/decoder1_checkpoint.pth')
-    enc_new_state_dict = {k.replace('module.', ''): v for k, v in encoder_checkpoint.items()}
-    dec_new_state_dict = {k.replace('module.', ''): v for k, v in decoder_checkpoint.items()}
-    encoder.load_state_dict(enc_new_state_dict)
-    decoder.load_state_dict(dec_new_state_dict)
+    loadckpt = 1
+    if loadckpt:
+        encoder_checkpoint = torch.load('/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mnist/encoder1_checkpoint.pth')
+        decoder_checkpoint = torch.load('/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mnist/decoder1_checkpoint.pth')
+        enc_new_state_dict = {k.replace('module.', ''): v for k, v in encoder_checkpoint.items()}
+        dec_new_state_dict = {k.replace('module.', ''): v for k, v in decoder_checkpoint.items()}
+        encoder.load_state_dict(enc_new_state_dict)
+        decoder.load_state_dict(dec_new_state_dict)
+    else: 
+        print('training autoencoder')
+        autoencoder_optimizer = Adam([*encoder.parameters(), *decoder.parameters()], lr = 3e-4)
+        autoencoder_dataloader = DataLoader(dataset, batch_size = 1, shuffle = True)
+        autoencoder_iter_dl = cycle(autoencoder_dataloader)
+        with tqdm(total = autoencoder_train_steps) as pbar:
+            for _ in range(autoencoder_train_steps):
+                _, images = next(autoencoder_iter_dl)
+                images = images.cuda()
+                latents = encoder(images)
+                latents = latents.lerp(torch.randn_like(latents), torch.rand_like(latents) * 0.2) # add a bit of noise to latents
+                reconstructed = decoder(latents)
+                loss = F.mse_loss(images, reconstructed)
+                loss.backward()
+                pbar.set_description(f'loss: {loss.item():.5f}')
+                autoencoder_optimizer.step()
+                autoencoder_optimizer.zero_grad()
+                pbar.update()
 
+        torch.save(encoder.state_dict(), '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mnist/encoder1_checkpoint.pth')
+        torch.save(decoder.state_dict(), '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mnist/decoder1_checkpoint.pth')
 
-    # autoencoder_optimizer = Adam([*encoder.parameters(), *decoder.parameters()], lr = 3e-4)
-    # autoencoder_dataloader = DataLoader(dataset, batch_size = 1, shuffle = True)
-    # autoencoder_iter_dl = cycle(autoencoder_dataloader)
-    # with tqdm(total = autoencoder_train_steps) as pbar:
-    #     for _ in range(autoencoder_train_steps):
-    #         _, images = next(autoencoder_iter_dl)
-    #         images = images.cuda()
-    #         latents = encoder(images)
-    #         latents = latents.lerp(torch.randn_like(latents), torch.rand_like(latents) * 0.2) # add a bit of noise to latents
-    #         reconstructed = decoder(latents)
-    #         loss = F.mse_loss(images, reconstructed)
-    #         loss.backward()
-    #         pbar.set_description(f'loss: {loss.item():.5f}')
-    #         autoencoder_optimizer.step()
-    #         autoencoder_optimizer.zero_grad()
-    #         pbar.update()
-
-    # torch.save(encoder.state_dict(), '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mnist/encoder1_checkpoint.pth')
-    # torch.save(decoder.state_dict(), '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mnist/decoder1_checkpoint.pth')
- 
     model = Transfusion(
         num_text_tokens = 50000,
         dim_latent = dim_latent,
@@ -235,13 +232,10 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
             heads = 8
         )
     )
-
-
     model = model.to(device)
     model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
-    #optimizer = optim.Adam(model.parameters(), lr=3e-4)  
     ema_model = model.module.create_ema().to(device)
-
+    #optimizer = optim.Adam(model.parameters(), lr=3e-4)  
     optimizer = Adam(model.module.parameters_without_encoder_decoder(), lr = 3e-4)
 
     state = dict( model = model, step=0, epoch=0)
@@ -271,73 +265,45 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
     accum_itr = 1
     if rank==0:
         wandb.init( project="transfusion")
+
     print("dataloader length:", len(joint_dataloader))
     for epoch in range(initial_epoch, num_epochs):
         print("epoch:",epoch)
         joint_sampler.set_epoch (epoch)
         optimizer.zero_grad()
-        for step, (_tokens,_images) in enumerate(joint_dataloader):
+        for step in range(len(joint_dataloader)):
             glob_step+=1
-            zeros_tensor = torch.zeros(1, 1)  #batchsize
-            normalized_tokens = torch.cat((zeros_tensor,_tokens), dim = 1)
-            normalized_tokens = normalized_tokens.cuda().long()
-            nt = normalized_tokens.squeeze()
-            images = _images.to(device)
-            im = images#.squeeze()
-            inp = [[nt,  im]]
-            loss = model(inp, return_loss = True)#, modality_type = 1)
+            data = next(iter_dl)
+            print(data)
+            loss = model(data, return_loss = True)#, modality_type = 1)
             loss = loss/accum_itr   #grad accumulation
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
             if ((step+1)% accum_itr == 0 or (step+1) == len(joint_dataloader) ):
                 optimizer.step()
                 optimizer.zero_grad()
-            if rank == 0 and step%1 == 0:
-                print("epoch step loss lr.............................: ",epoch, glob_step, loss.item())
-                wandb.log({"glob_step": glob_step, "train_loss": loss.item()})
-       # if (epoch>=0 and epoch%1==0) and rank==0:
-            if rank == 0  and step%500 == 0:
-                state['epoch']=epoch
-                state['step']=step
-               # save_checkpoint_for_non_ddp(os.path.join(checkpoint_dir, f'non_ddp_checkpoint_{epoch}_{step}.pth'),state)
-                #save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_matsci_{epoch}_{step}.pth'), state)
-                print(f'chepoint saved: checkpoint_{epoch}_{step}.pth')
-
-                #prime = torch.tensor([102, 3488, 165, 21232, 8724, 7908, 137, 6592, 2632, 121, 111, 13879, 264, 579, 239, 30119, 1630, 583, 205, 3488, 145, 158, 546, 165, 23152, 121, 106, 2160, 579, 11853, 13879, 5840, 147, 4834, 3552, 3488, 145, 158, 546, 6448, 205, 355, 3488, 145, 158, 546, 579, 3488, 145, 158, 546, 3817, 8546, 220, 305, 205, 3291, 106, 205, 103])
-                #prime = torch.tensor([101, 1055, 2003, 6541, 7367, 7770, 5007, 1011, 2066, 14336, 1998, 6121, 3669, 11254, 1999, 1996, 13012, 20028, 1054, 1011, 1017, 2686, 2177, 1012, 1996, 3252, 2003, 5717, 1011, 8789, 1998, 3774, 1997, 2093, 2002, 18684, 23722, 27942, 10737, 1012, 1055, 1006, 1015, 1007, 2003, 20886, 1999, 1037, 2300, 1011, 2066, 10988, 2000, 2048, 5662, 1055, 1006, 1015, 1007, 13353, 1012, 2119, 1055, 1006, 1015, 1007, 1011, 1055, 1006, 1015, 1007, 5416, 10742, 2024, 1016, 1012, 5718, 1037, 1012, 102])
-                save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/matsci_{dim_latent}_{mod_shape}_{xdim}_{xdepth}/"
-                os.makedirs(save_path, exist_ok=True)
-                multimodal = 1
-                text_only = 0
-                if multimodal: 
-                    one_multimodal_sample = model.module.sample(max_length = 100)
-                    print_modality_sample(one_multimodal_sample)
-                    if len(one_multimodal_sample) >= 2:
-                        #continue
-                        maybe_label, maybe_image, *_ = one_multimodal_sample
-                        # import re
-                        # text = tokenizer.decode(maybe_label)
-                        # clean_text = re.sub(r'[^a-zA-Z0-9]', '', text)
-                        # print("label:", clean_text)
-                        filename = f'{save_path}/{epoch}_{step}_.png'
-                        save_image(
-                            maybe_image[1][1].cpu().clamp(min = 0., max = 1.),
-                            filename
-                        )
-                        # filename = f'{save_path}/{epoch}_{step}_.json'
-                        # with open(filename, 'w', encoding='utf-8') as json_file:
-                        #     json.dump(maybe_label.tolist(), json_file)
-                
-                # if text_only:
-                #     inp = torch.tensor([101, 1055, 2003, 6541, 7367, 7770, 50070]).to(device)
-                #     prompt = inp[None, ...]
-                #     maybe_label = model.module.generate_text_only(prompt ,100)
-                #     #print(maybe_label)
-                #     text = tokenizer.decode(maybe_label[0])
-                #     orig = tokenizer.decode(prime)
-                #     print("res:", text)
-                #     print("orig:", orig)
-
+            if rank == 0:
+                if step%1 == 0:
+                    print("epoch step loss lr.............................: ",epoch, glob_step, loss.item())
+                    wandb.log({"glob_step": glob_step, "train_loss": loss.item()})
+                if step%500 == 0:
+                    state['epoch']=epoch
+                    state['step']=step
+                    #save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_matsci_{epoch}_{step}.pth'), state)
+                    print(f'chepoint saved: checkpoint_{epoch}_{step}.pth')
+                    save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/matsci_{dim_latent}_{mod_shape}_{xdim}_{xdepth}/"
+                    os.makedirs(save_path, exist_ok=True)
+                    multimodal = 1
+                    if multimodal: 
+                        one_multimodal_sample = model.module.sample(max_length = 100)
+                        print_modality_sample(one_multimodal_sample)
+                        if len(one_multimodal_sample) >= 2:
+                            maybe_label, maybe_image, *_ = one_multimodal_sample
+                            filename = f'{save_path}/{epoch}_{step}_.png'
+                            save_image(
+                                maybe_image[1][1].cpu().clamp(min = 0., max = 1.),
+                                filename
+                                    )
     dist.destroy_process_group()
 
 
@@ -346,10 +312,10 @@ if __name__=="__main__":
     #train()
     parser = argparse.ArgumentParser(description="Process some integers.")
 
-    parser.add_argument('--dim_latent', type=int, required=True, help='Dimension of the latent space')
-    parser.add_argument('--mod_shape', type=int, required=True, help='Model shape as a list of integers')
-    parser.add_argument('--xdim', type=int, required=True, help='Dimension x')
-    parser.add_argument('--xdepth', type=int, required=True, help='Depth x')
+    parser.add_argument('--dim_latent', type=int, required=True, default = 16, help='Dimension of the latent space')
+    parser.add_argument('--mod_shape', type=int, required=True, default = 14, help='Model shape as a list of integers')
+    parser.add_argument('--xdim', type=int, required=True,  default = 256, help='Dimension x')
+    parser.add_argument('--xdepth', type=int, required=True, default = 4, help='Depth x')
     
 
     args = parser.parse_args()
