@@ -78,7 +78,7 @@ class JointDataset(Dataset):
         self.directory = directory
         self.filenames = [f for f in os.listdir(directory) if f.endswith('.pt')]
         self.transform = transforms.Compose([
-            transforms.CenterCrop((dim_latent, dim_latent)),
+            transforms.CenterCrop((dim_latent*2, dim_latent*2)),
             transforms.Lambda(lambda x: (x - x.min()) / (x.max() - x.min()))
         ])
 
@@ -88,28 +88,10 @@ class JointDataset(Dataset):
         file_path = os.path.join(self.directory, self.filenames[idx])
         label, im=torch.load(file_path)
         label = torch.tensor(label, dtype=torch.long)#[0:50]
-        image = torch.from_numpy(im).float()#.unsqueeze(0)
+        image = torch.from_numpy(im)[0].float().unsqueeze(0)
         image = self.transform(image)
         return image, label
 
-class AEdataset(Dataset):
-    def __init__(self):
-        self.directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/comb_sg_npy'
-        self.filenames = [f for f in os.listdir(self.directory) if f.endswith('.pt')]
-        self.transform = transforms.Compose([
-            transforms.CenterCrop((dim_latent, dim_latent)),
-            transforms.Lambda(lambda x: (x - x.min()) / (x.max() - x.min()))
-        ])
-
-    def __len__(self):
-        return len(self.filenames)
-    def __getitem__(self, idx):
-        file_path = os.path.join(self.directory, self.filenames[idx])
-        label, im=torch.load(file_path)
-        label = torch.tensor(label, dtype=torch.long)#[0:50]
-        image = torch.from_numpy(im).float()#.unsqueeze(0)
-        image = self.transform(image)
-        return image, label
 
 def create_dataloader_ddp(directory, batch_size=1, shuffle=True):
     dataset = TokenDataset(directory)
@@ -138,6 +120,7 @@ def init_distributed(rank,local_rank,ws,address,port):
 
 def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
     dim_latent, mod_shape, xdim, xdepth = _dim_latent, _mod_shape, _xdim, _xdepth
+    CHANNEL_FIRST = True
     x=1  #so that code does not go into slurm_ntasks loop while running without slurm. Remove this before submitting to slurm. 
     if x and "SLURM_NTASKS" in os.environ:
         print("should not come here")
@@ -163,67 +146,33 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
     joint_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/comb_sg_npy'
     joint_dataloader, joint_sampler = create_joint_dataloader_ddp(joint_directory, dim_latent, batch_size=16)
     iter_dl = cycle(joint_dataloader)
-    dataset =  AEdataset()
-    autoencoder_dataloader = DataLoader(dataset, batch_size = 32, shuffle = True)
-    autoencoder_train_steps = 10000
 
-    encoder = nn.Sequential(
-        nn.Conv2d(3, 4, 3, padding = 1),
-        nn.Conv2d(4, 8, 4, 2, 1),
-        nn.ReLU(),
-        nn.Dropout(0.05),
-        nn.Conv2d(8, dim_latent, 1),
-        Rearrange('b d ... -> b ... d'),
-        Normalize()
-    ).to(device)
+    class Encoder(Module):
+        def forward(self, x):
+            x = rearrange(x, '... 1 (h p1) (w p2) -> ... h w (p1 p2)', p1 = 2, p2 = 2)
+            if CHANNEL_FIRST:
+                x = rearrange(x, 'b ... d -> b d ...')
 
-    decoder = nn.Sequential(
-        Rearrange('b ... d -> b d ...'),
-        nn.Conv2d(dim_latent, 8, 1),
-        nn.ReLU(),
-        nn.ConvTranspose2d(8, 4, 4, 2, 1),
-        nn.Conv2d(4, 1, 3, padding = 1),
-    ).to(device)
+            return x * 2 - 1
 
+    class Decoder(Module):
+        def forward(self, x):
 
-    # train autoencoder
-    loadckpt = 0
-    if loadckpt:
-        encoder_checkpoint = torch.load('/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mnist/encoder1_checkpoint.pth')
-        decoder_checkpoint = torch.load('/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mnist/decoder1_checkpoint.pth')
-        enc_new_state_dict = {k.replace('module.', ''): v for k, v in encoder_checkpoint.items()}
-        dec_new_state_dict = {k.replace('module.', ''): v for k, v in decoder_checkpoint.items()}
-        encoder.load_state_dict(enc_new_state_dict)
-        decoder.load_state_dict(dec_new_state_dict)
-    else: 
-        print('training autoencoder')
-        autoencoder_optimizer = Adam([*encoder.parameters(), *decoder.parameters()], lr = 3e-4)
-        autoencoder_iter_dl = cycle(autoencoder_dataloader)
-        with tqdm(total = autoencoder_train_steps) as pbar:
-            for _ in range(autoencoder_train_steps):
-                images, _ = next(autoencoder_iter_dl)
-                images = images.cuda()
-                latents = encoder(images)
-                latents = latents.lerp(torch.randn_like(latents), torch.rand_like(latents) * 0.2) # add a bit of noise to latents
-                reconstructed = decoder(latents)
-                loss = F.mse_loss(images, reconstructed)
-                loss.backward()
-                pbar.set_description(f'loss: {loss.item():.5f}')
-                autoencoder_optimizer.step()
-                autoencoder_optimizer.zero_grad()
-                pbar.update()
+            if CHANNEL_FIRST:
+                x = rearrange(x, 'b d ... -> b ... d')
 
-        torch.save(encoder.state_dict(), '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mnist/encoder1_checkpoint.pth')
-        torch.save(decoder.state_dict(), '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mnist/decoder1_checkpoint.pth')
-
+            x = rearrange(x, '... h w (p1 p2) -> ... 1 (h p1) (w p2)', p1 = 2, p2 = 2)
+            return ((x + 1) * 0.5).clamp(min = 0., max = 1.)
+    
     model = Transfusion(
         num_text_tokens = 250,
-        dim_latent = dim_latent,
+        dim_latent = 4,
         modality_default_shape = (mod_shape,mod_shape),
-        modality_encoder = encoder,
-        modality_decoder = decoder,
+        modality_encoder = Encoder(),
+        modality_decoder = Decoder(),
         add_pos_emb = True,
         modality_num_dim = 2,
+        channel_first_latent = CHANNEL_FIRST,
         transformer = dict(
             dim = xdim,
             depth = xdepth,
