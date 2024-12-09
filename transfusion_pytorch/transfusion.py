@@ -133,6 +133,11 @@ def cast_tuple(t, length = 1):
 def tree_map_tensor(sample, fn: Callable):
     return tree_map(lambda t: t if not is_tensor(t) else fn(t), sample)
 
+def always(val):
+    def inner(*args, **kwargs):
+        return val
+    return inner
+
 def add_temp_batch_dim(fn: Callable):
     @wraps(fn)
     def inner(t: Tensor, *args, **kwargs) -> Tensor:
@@ -776,7 +781,7 @@ class Attention(Module):
             nn.Linear(dim, heads),
             nn.Sigmoid(),
             Rearrange('b n h -> b h n 1') # add head dimension
-        ) if learned_value_residual_mix else (lambda _: 0.5)
+        ) if learned_value_residual_mix else always(0.5)
 
         self.to_gates = nn.Sequential(
             nn.Linear(dim, heads, bias = False),

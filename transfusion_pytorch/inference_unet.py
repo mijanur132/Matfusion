@@ -74,21 +74,13 @@ def custom_collate_fn(data):
     return data
 
 class JointDataset(Dataset):
-    def __init__(self, directory, dim_latent, split):
+    def __init__(self, directory, dim_latent):
         self.directory = directory
-        self.all_filenames = [f for f in os.listdir(directory) if f.endswith('.pt')]
-        #np.random.shuffle(self.all_filenames) 
+        self.filenames = [f for f in os.listdir(directory) if f.endswith('.pt')]
         self.transform = transforms.Compose([
             transforms.CenterCrop((dim_latent, dim_latent)),
-           transforms.Lambda(lambda x: (x - x.min()) / (x.max() - x.min()))
+            transforms.Lambda(lambda x: (x - x.min()) / (x.max() - x.min()))
         ])
-        split_index = int(len(self.all_filenames) * 0.99)
-        
-        if split == 'train':
-            self.filenames = self.all_filenames#[:split_index]
-        else:
-            self.filenames = self.all_filenames[split_index:]
-
 
     def __len__(self):
         return len(self.filenames)
@@ -113,8 +105,8 @@ def create_image_dataloader_ddp(directory, batch_size=1, shuffle=True):
     dataloader = DataLoader(dataset, batch_size=batch_size, sampler = sampler, shuffle=False, num_workers=4, pin_memory=True)
     return dataloader, sampler
 
-def create_joint_dataloader_ddp(directory, dim_latent = 28, batch_size=1, shuffle=True, split='train'):
-    dataset = JointDataset(directory, dim_latent, split)
+def create_joint_dataloader_ddp(directory, dim_latent = 28, batch_size=1, shuffle=True):
+    dataset = JointDataset(directory, dim_latent)
     sampler = DistributedSampler(dataset, shuffle = shuffle)
     dataloader = DataLoader(dataset, batch_size=batch_size, sampler = sampler, shuffle=False, num_workers=4, pin_memory=True, collate_fn=custom_collate_fn)
     return dataloader, sampler
@@ -151,14 +143,9 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
     device= torch.device('cuda', local_rank)
     print(f"Process {rank} using device: {device}")
 
-    joint_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/comb_sg_npy_top3'
-    joint_dataloader, joint_sampler = create_joint_dataloader_ddp(joint_directory, dim_latent, batch_size=16, split= 'train')
+    joint_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/valid'
+    joint_dataloader, joint_sampler = create_joint_dataloader_ddp(joint_directory, dim_latent, batch_size=16)
     iter_dl = cycle(joint_dataloader)
-
-    valid_dataloader, valid_sampler = create_joint_dataloader_ddp(joint_directory, dim_latent, batch_size=100, split= 'valid')
-    valid_iter_dl = cycle(valid_dataloader)
-
-    print("valid_len",len(valid_dataloader))
 
     class Encoder(Module):
         def forward(self, x):
@@ -196,7 +183,7 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
     model = model.to(device)
     model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
     ema_model = model.module.create_ema().to(device)
-    optimizer = optim.Adam(model.parameters(), lr=3e-5)  
+    optimizer = optim.Adam(model.parameters(), lr=3e-4)  
     #optimizer = Adam(model.module.parameters_without_encoder_decoder(), lr = 3e-4)
 
     state = dict( model_state = model.state_dict(), step=0, epoch=0)
@@ -206,12 +193,7 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
     checkpoint_files.sort(key=os.path.getmtime, reverse=True)
     initial_step = int(state['step'])
     initial_epoch = int(state['epoch'])    
-    want_checkpt = 0
-    delete_chkpt =1
-    if delete_chkpt:
-        rmtree(checkpoint_dir, ignore_errors = True)
-        os.makedirs(checkpoint_dir, exist_ok=True)
-
+    want_checkpt = 1
     if checkpoint_files and want_checkpt:
         latest_checkpoint = checkpoint_files[0]
         if rank==0:
@@ -236,64 +218,41 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
     save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/matsci_img2txt_unet_{dim_latent}_{mod_shape}_{xdim}_{xdepth}/"
     rmtree(save_path, ignore_errors = True)
     os.makedirs(save_path, exist_ok=True)
+    
 
-    print("dataloader length:", len(joint_dataloader), len(valid_dataloader))
-    for epoch in range(initial_epoch, num_epochs):
-        print("epoch:",epoch)
-        joint_sampler.set_epoch (epoch)
-        optimizer.zero_grad()
-        for step in range(len(joint_dataloader)):
-            glob_step+=1
-            data = next(iter_dl)
-            loss = model(data)#, return_loss = True)#, modality_type = 1)
-            loss = loss/accum_itr   #grad accumulation
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
-            if ((step+1)% accum_itr == 0 or (step+1) == len(joint_dataloader) ):
-                optimizer.step()
-                optimizer.zero_grad()
-                ema_model.update()
-            if rank == 0:
-                if step%1 == 0:
-                    print("epoch step loss lr.............................: ",epoch, glob_step, loss.item())
-                    # wandb.log({"glob_step": glob_step, "train_loss": loss.item()})
-                if step >100 and step%100 == 0:
-                    state['epoch']=epoch
-                    state['step']=step
+    joint_dataloader =[]
+    for filename in os.listdir(joint_directory):
+        if filename.endswith(".pt"):
+            source_path = os.path.join(joint_directory, filename)
+            data = torch.load(source_path)
+            joint_dataloader.append(data)
 
-                    rmtree(checkpoint_dir, ignore_errors = True)
-                    os.makedirs(checkpoint_dir, exist_ok=True)
 
-                    save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_matsci_image2txt_{epoch}_{step}.pth'), state)
-                    print(f'chepoint saved: checkpoint_{epoch}_{step}.pth')
-                  
-                    multimodal = 1
-                    if multimodal: 
-                        correct = 0
-                        total =0
-                        #for i in range(1):#len(valid_dataloader)): 
-                        rand_batch = next(iter_dl)
-                        for i in range(len(rand_batch)):
-                            rand_image = rand_batch[i][0].to(device)
-                            one_multimodal_sample = model.module.sample(prompt = rand_image, max_length = 2)
-                            #print_modality_sample(one_multimodal_sample)
-                            if len(one_multimodal_sample) >= 2:
-                                _, maybe_image, maybe_label = one_multimodal_sample
-                                # filename = f'{save_path}/{epoch}_{step}_pr_{maybe_label[1].item()}_og_{rand_batch[0][1].item()}.png'
-                                # save_image(
-                                #     maybe_image[1].cpu()*255,
-                                #     filename
-                                #         )
-                                total +=1
-                                if rand_batch[i][1].item() == maybe_label[1].item():
-                                    correct +=1
-
-                        acc = correct*100/total
-                        if acc> 60:
-                            paths = f'{save_path}/valid_{acc}.pt'
-                            torch.save(rand_batch, paths)
-                        print(f"total:{total}, correct:{correct}, accu:{acc}")
-                        wandb.log({"accu": acc})
+    print("dataloader length:", len(joint_dataloader))
+    total =0
+    correct =0 
+    for step in range(len(joint_dataloader)):
+        if rank == 0:
+            multimodal = 1
+            if multimodal: 
+                rand_batch = joint_dataloader[step] #next(iter_dl)
+                for i in range(len(rand_batch)):
+                    rand_image = rand_batch[i][0].to(device)
+                    one_multimodal_sample = model.module.sample(prompt = rand_image, max_length = 15)
+                    print_modality_sample(one_multimodal_sample)
+                    if len(one_multimodal_sample) >= 2:
+                        _, maybe_image, maybe_label = one_multimodal_sample
+                        print("label:",maybe_label)
+                        filename = f'{save_path}/pr_{maybe_label[1].item()}_og_{rand_batch[i][1].item()}.png'
+                        save_image(
+                            maybe_image[1].cpu()*255,
+                            filename
+                                )
+                        total +=1
+                        if rand_batch[i][1].item() == maybe_label[1].item():
+                            correct +=1
+                acc = correct*100/total
+                print(f"step:{step},total:{total}, correct:{correct}, accu:{acc}")
     dist.destroy_process_group()
 
 

@@ -60,12 +60,12 @@ def restore_checkpoint(ckpt_dir, state, device):
       return state
   
   checkpt = torch.load(ckpt_dir, map_location=device)
-  state['model'].load_state_dict(checkpt['model'].state_dict(), strict=False)
+  state['model_state'] = checkpt ['model_state']
   state['step'] = checkpt['step']
   state['epoch'] = checkpt['epoch']
   print(f'loaded checkpoint from {ckpt_dir}')
   return state
-
+  
 def save_checkpoint(ckpt_dir, state):
   torch.save(state,ckpt_dir)
 
@@ -88,13 +88,13 @@ class JointDataset(Dataset):
         file_path = os.path.join(self.directory, self.filenames[idx])
         label, im=torch.load(file_path)
         label = torch.tensor(label, dtype=torch.long)#[0:50]
-        image = torch.from_numpy(im).float()#.unsqueeze(0)
+        image = torch.from_numpy(im).float()[0].unsqueeze(0)
         image = self.transform(image)
         return image, label
 
 class AEdataset(Dataset):
     def __init__(self):
-        self.directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/comb_sg_npy'
+        self.directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/comb_sg_npy_selected_sg'
         self.filenames = [f for f in os.listdir(self.directory) if f.endswith('.pt')]
         self.transform = transforms.Compose([
             transforms.CenterCrop((dim_latent, dim_latent)),
@@ -107,7 +107,7 @@ class AEdataset(Dataset):
         file_path = os.path.join(self.directory, self.filenames[idx])
         label, im=torch.load(file_path)
         label = torch.tensor(label, dtype=torch.long)#[0:50]
-        image = torch.from_numpy(im).float()#.unsqueeze(0)
+        image = torch.from_numpy(im).float()[0].unsqueeze(0)
         image = self.transform(image)
         return image, label
 
@@ -160,7 +160,7 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
     device= torch.device('cuda', local_rank)
     print(f"Process {rank} using device: {device}")
 
-    joint_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/comb_sg_npy'
+    joint_directory = '/lustre/orion/stf218/proj-shared/brave/brave_database/junqi_diffraction/comb_sg_npy_selected_sg'
     joint_dataloader, joint_sampler = create_joint_dataloader_ddp(joint_directory, dim_latent, batch_size=16)
     iter_dl = cycle(joint_dataloader)
     dataset =  AEdataset()
@@ -168,7 +168,7 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
     autoencoder_train_steps = 10000
 
     encoder = nn.Sequential(
-        nn.Conv2d(3, 4, 3, padding = 1),
+        nn.Conv2d(1, 4, 3, padding = 1),
         nn.Conv2d(4, 8, 4, 2, 1),
         nn.ReLU(),
         nn.Dropout(0.05),
@@ -189,8 +189,8 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
     # train autoencoder
     loadckpt = 0
     if loadckpt:
-        encoder_checkpoint = torch.load('/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mnist/encoder1_checkpoint.pth')
-        decoder_checkpoint = torch.load('/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mnist/decoder1_checkpoint.pth')
+        encoder_checkpoint = torch.load(f'/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/encoder_img2txt_{dim_latent}_{mod_shape}_{xdim}_{xdepth}_checkpoint.pth')
+        decoder_checkpoint = torch.load(f'/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/decoder_img2txt_{dim_latent}_{mod_shape}_{xdim}_{xdepth}_checkpoint.pth')
         enc_new_state_dict = {k.replace('module.', ''): v for k, v in encoder_checkpoint.items()}
         dec_new_state_dict = {k.replace('module.', ''): v for k, v in decoder_checkpoint.items()}
         encoder.load_state_dict(enc_new_state_dict)
@@ -213,8 +213,8 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
                 autoencoder_optimizer.zero_grad()
                 pbar.update()
 
-        torch.save(encoder.state_dict(), '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mnist/encoder1_checkpoint.pth')
-        torch.save(decoder.state_dict(), '/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/mnist/decoder1_checkpoint.pth')
+        torch.save(encoder.state_dict(), f'/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/encoder_img2txt_{dim_latent}_{mod_shape}_{xdim}_{xdepth}_checkpoint.pth')
+        torch.save(decoder.state_dict(), f'/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/decoder_img2txt_{dim_latent}_{mod_shape}_{xdim}_{xdepth}_checkpoint.pth')
 
     model = Transfusion(
         num_text_tokens = 250,
@@ -237,7 +237,7 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
     #optimizer = optim.Adam(model.parameters(), lr=3e-4)  
     optimizer = Adam(model.module.parameters_without_encoder_decoder(), lr = 3e-4)
 
-    state = dict( model = model, step=0, epoch=0)
+    state = dict( model_state = model.state_dict(), step=0, epoch=0)
     checkpoint_dir = f'/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/matsci_img2txt_{dim_latent}_{mod_shape}_{xdim}_{xdepth}'
     os.makedirs(checkpoint_dir, exist_ok=True)
     checkpoint_files = glob.glob(os.path.join(checkpoint_dir, "checkpoint_*.pth"))
@@ -251,6 +251,7 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
             print(f"latest checkpoint.................:{latest_checkpoint}")
             checkpoint_dir_temp = os.path.join(checkpoint_dir, latest_checkpoint)
             state = restore_checkpoint(checkpoint_dir_temp, state, device)
+            model.load_state_dict(state['model_state'])
             initial_epoch = int(state['epoch'])+1
             initial_step = int(state['step'])+1
             print("initial_epoch:", initial_epoch)
@@ -287,7 +288,7 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
                 if step%100 == 0:
                     state['epoch']=epoch
                     state['step']=step
-                    #save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_matsci_image2txt_{epoch}_{step}.pth'), state)
+                    save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_matsci_image2txt_{epoch}_{step}.pth'), state)
                     print(f'chepoint saved: checkpoint_{epoch}_{step}.pth')
                     save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/matsci_img2txt_{dim_latent}_{mod_shape}_{xdim}_{xdepth}/"
                     os.makedirs(save_path, exist_ok=True)
