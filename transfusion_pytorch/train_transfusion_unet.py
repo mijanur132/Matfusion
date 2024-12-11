@@ -80,7 +80,8 @@ class JointDataset(Dataset):
         #np.random.shuffle(self.all_filenames) 
         self.transform = transforms.Compose([
             transforms.CenterCrop((dim_latent, dim_latent)),
-           transforms.Lambda(lambda x: (x - x.min()) / (x.max() - x.min()))
+            transforms.Lambda(lambda x: x**0.25)
+           #transforms.Lambda(lambda x: (x - x.min()) / (x.max() - x.min()))
         ])
         split_index = int(len(self.all_filenames) * 0.99)
         
