@@ -1109,6 +1109,35 @@ class Transformer(Module):
 
 # classes
 
+class TransfusionWithClassifier(torch.nn.Module):
+    def __init__(self, original_model, in_dim, out_dim):
+        super(TransfusionWithClassifier, self).__init__()
+        self.feature_extractor = original_model  # use the original model as a feature extractor
+
+        self.conv_block = nn.Sequential(
+            nn.Conv2d(in_channels=1, out_channels=16, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2)  # reduces 196x256 -> 98x128
+        )
+        # Adding new layers
+        self.classifier = torch.nn.Sequential(
+            torch.nn.Linear(in_features=16*98*128, out_features=256),  # Example sizes
+            torch.nn.ReLU(),
+            torch.nn.Dropout(0.5),
+            torch.nn.Linear(256, out_dim)  # Assuming 10 classes for classification
+        )
+
+    def forward(self, x):
+        with torch.no_grad():
+            x = self.feature_extractor(x)  # Feature extraction phase, gradients not needed
+        x = x.unsqueeze(1)
+        x = self.conv_block(x)
+        x = x.view(x.size(0), -1)  # -> [B, 16*98*128]
+        x = self.classifier(x)  # Classification phase
+        print("palashx,",x.shape)
+        return x
+
+
 class Transfusion(Module):
     @beartype
     def __init__(
@@ -1952,6 +1981,105 @@ class Transfusion(Module):
     @torch.no_grad()
     @eval_decorator
     @typecheck
+
+    #palash2
+    @typecheck
+    def forward_modality_classification(
+        self,
+        modalities: Float['b ...'],
+        times: Float['b'] | None = None,
+        modality_type: int | None = None,
+        encode_modality: bool = True,
+        velocity_consistency_ema_model: Transfusion | None = None,
+        velocity_consistency_delta_time = 1e-5,
+        return_loss = True,
+        return_loss_breakdown = False
+    ) -> Scalar | Float['b ...']:
+        requires_velocity_consistency = exists(velocity_consistency_ema_model)
+
+        modalities = modalities.to(self.device)
+        orig_modalities = modalities
+
+        if self.num_modalities > 1:
+            assert exists(modality_type), '`modality_type` must be explicitly passed in on forward when training on greater than 1 modality'
+
+        modality_type = default(modality_type, 0)
+
+        mod = self.get_modality_info(modality_type)
+
+        # maybe modality encode
+
+        if encode_modality and exists(mod.encoder):
+            with torch.no_grad():
+                mod.encoder.eval()
+                modalities = mod.encoder(modalities).detach()
+
+        # shapes and device
+
+        tokens = modalities
+
+        batch, device = tokens.shape[0], tokens.device
+
+        # times
+
+        if not exists(times):
+            times = torch.rand((batch,), device = device)
+
+        if return_loss:
+
+            if requires_velocity_consistency:
+                orig_times = times.clone()
+                times = times * (1. - velocity_consistency_delta_time) # make sure times are max of 1. - small delta, for velocity consistency
+
+            padded_times = append_dims(times, tokens.ndim - 1)
+
+            noise = torch.randn_like(tokens)
+
+            noised_tokens = padded_times * tokens + (1. - padded_times) * noise
+
+            flow = tokens - noise
+
+        else:
+            noised_tokens = tokens
+
+        # from latent to model tokens
+
+        noised_tokens = mod.latent_to_model(noised_tokens)
+
+        # axial positions
+
+        if mod.add_pos_emb:
+            assert exists(mod.num_dim), f'modality_num_dim must be set for modality {modality_type} if further injecting axial positional embedding'
+
+            _, *axial_dims, _ = noised_tokens.shape
+
+            assert len(axial_dims) == mod.num_dim, f'received modalities of ndim {len(axial_dims)} but expected {modality_num_dim}'
+
+        # maybe transform
+
+        noised_tokens, inverse_pack_axial_dims = pack_one_with_inverse(noised_tokens, 'b * d')
+
+        # maybe add axial pos emb
+
+        if mod.add_pos_emb:
+            axial_pos_emb = mod.pos_emb_mlp(tensor(axial_dims), flatten_dims = True)
+            noised_tokens = noised_tokens + axial_pos_emb
+
+        # attention
+        print("noised_tokens", noised_tokens.shape)
+        embed = self.transformer(
+            noised_tokens,
+            times = times,
+            modality_only = True,
+        )
+        #print("ret palash2", embed.shape) #2*196*256
+        #embed = inverse_pack_axial_dims(embed)
+
+        #embed_dim_latent = mod.model_to_latent(embed)  #Linear(dim, dim_latent, bias = False)
+
+        #print("ret palash2", embed_dim_latent.shape) #2,14,14, dim_latent
+        return embed
+
     def generate_modality_only(
         self,
         batch_size: int = 1,
@@ -2071,7 +2199,7 @@ class Transfusion(Module):
                 velocity_consistency_ema_model = velocity_consistency_ema_model
             )
 
-            return self.forward_modality(modalities, **forward_modality_kwargs)
+            return self.forward_modality_classification(modalities, **forward_modality_kwargs)
 
         batch = len(modalities)
         device = self.device
