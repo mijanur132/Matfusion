@@ -2199,7 +2199,9 @@ class Transfusion(Module):
                 velocity_consistency_ema_model = velocity_consistency_ema_model
             )
 
-            return self.forward_modality_classification(modalities, **forward_modality_kwargs)
+            #return self.forward_modality_classification(modalities, **forward_modality_kwargs)
+            print("palash 3")
+            return self.forward_modality(modalities, **forward_modality_kwargs)
 
         batch = len(modalities)
         device = self.device
