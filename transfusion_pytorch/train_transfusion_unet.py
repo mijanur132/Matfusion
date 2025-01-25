@@ -60,7 +60,7 @@ def restore_checkpoint(ckpt_dir, state, device):
       print(f"Checkpoint file {ckpt_dir} does not exist.")
       return state
   
-  checkpt = torch.load(ckpt_dir, map_location=device)
+  checkpt = torch.load(ckpt_dir, map_location=device, weights_only = True)
   state['model_state'] = checkpt ['model_state']
   state['step'] = checkpt['step']
   state['epoch'] = checkpt['epoch']
@@ -202,7 +202,7 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
     #optimizer = Adam(model.module.parameters_without_encoder_decoder(), lr = 3e-4)
 
     state = dict( model_state = old_model.state_dict(), step=0, epoch=0)
-    checkpoint_dir = f'/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/classification_unet_{dim_latent}_{mod_shape}_{xdim}_{xdepth}'
+    checkpoint_dir = f'/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/fnd_sg_unet_{dim_latent}_{mod_shape}_{xdim}_{xdepth}'
     os.makedirs(checkpoint_dir, exist_ok=True)
     checkpoint_files = glob.glob(os.path.join(checkpoint_dir, "checkpoint_*.pth"))
     checkpoint_files.sort(key=os.path.getmtime, reverse=True)
@@ -239,7 +239,7 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
                                 )
     model = model.to(device)
     model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
-    optimizer = torch.optim.Adam(model.module.classifier.parameters(), lr=1e-3)
+    optimizer = torch.optim.Adam(model.module.classifier.parameters(), lr=1e-4)
     criterion = torch.nn.CrossEntropyLoss()
 
 
@@ -250,7 +250,7 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
     if rank==0:
         wandb.init( project="transfusion")
 
-    save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/classification_unet_{dim_latent}_{mod_shape}_{xdim}_{xdepth}/"
+    save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/fnd_sg_unet_{dim_latent}_{mod_shape}_{xdim}_{xdepth}/"
     rmtree(save_path, ignore_errors = True)
     os.makedirs(save_path, exist_ok=True)
 
