@@ -1121,7 +1121,7 @@ class TransfusionWithClassifier(torch.nn.Module):
         )
         # Adding new layers
         self.classifier = torch.nn.Sequential(
-            torch.nn.Linear(in_features=16*98*128, out_features=256),  # Example sizes
+            torch.nn.Linear(in_features=401408, out_features=256),  # Example sizes
             torch.nn.ReLU(),
             torch.nn.Dropout(0.5),
             torch.nn.Linear(256, out_dim)  # Assuming 10 classes for classification
@@ -1131,7 +1131,9 @@ class TransfusionWithClassifier(torch.nn.Module):
         with torch.no_grad():
             x = self.feature_extractor(x)  # Feature extraction phase, gradients not needed
         x = x.unsqueeze(1)
+        print(x.shape)
         x = self.conv_block(x)
+        print(x.shape)
         x = x.view(x.size(0), -1)  # -> [B, 16*98*128]
         x = self.classifier(x)  # Classification phase
         print("palashx,",x.shape)
@@ -2043,7 +2045,7 @@ class Transfusion(Module):
             noised_tokens = tokens
 
         # from latent to model tokens
-
+        noised_tokens = tokens #palash, no noise added
         noised_tokens = mod.latent_to_model(noised_tokens)
 
         # axial positions
@@ -2168,6 +2170,8 @@ class Transfusion(Module):
         is_text_only = is_tensor(modalities) and modalities.dtype in (torch.int, torch.long)
         is_modality_only = is_tensor(modalities) and modalities.dtype == torch.float
 
+        print("is_modality_only", is_tensor(modalities),is_modality_only)
+
         # handle ema model being passed in for velocity consistency loss
 
         if isinstance(velocity_consistency_ema_model, EMA):
@@ -2199,9 +2203,9 @@ class Transfusion(Module):
                 velocity_consistency_ema_model = velocity_consistency_ema_model
             )
 
-            #return self.forward_modality_classification(modalities, **forward_modality_kwargs)
-            print("palash 3")
-            return self.forward_modality(modalities, **forward_modality_kwargs)
+            return self.forward_modality_classification(modalities, **forward_modality_kwargs)
+            # print("palash 3")
+            # return self.forward_modality(modalities, **forward_modality_kwargs)
 
         batch = len(modalities)
         device = self.device

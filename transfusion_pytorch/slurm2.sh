@@ -11,7 +11,7 @@
 #SBATCH -C nvme
 #BATCH -q debug
 
-source sbcast_env.sh
+#source sbcast_env.sh
 # module purge
 module load PrgEnv-gnu
 module load gcc/11.2.0
@@ -19,6 +19,11 @@ module load rocm/6.0.0
 module load ninja
 export http_proxy=http://proxy.ccs.ornl.gov:3128/
 export https_proxy=http://proxy.ccs.ornl.gov:3128/
+
+source /autofs/nccs-svm1_sw/frontier/python/3.10/miniforge3/23.11.0/etc/profile.d/conda.sh
+conda activate /ccs/home/palashmr/packages/miniconda/pyt_env/transfusion
+
+
 
 #conda activate  /lustre/orion/stf218/world-shared/palashmr/py310_frontier
 #export LD_LIBRARY_PATH=/opt/rocm-6.0.0/include/rccl/build:$PWD/aws-ofi-rccl/src/.libs/:/opt/cray/libfabric/1.15.2.0/lib64/:/opt/rocm-6.0.0/lib #slingshot
@@ -44,6 +49,6 @@ export WANDB_PROJECT="transfusion"
 
 N_node=$SLURM_NNODES
 
-srun python train_transfusion.py  --dim_latent $1 --mod_shape "$2" --xdim $3 --xdepth $4
+srun python train_transfusion_unet.py  --dim_latent $1 --mod_shape "$2" --xdim $3 --xdepth $4
 
 
