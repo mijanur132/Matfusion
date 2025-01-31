@@ -3,15 +3,15 @@
 #SBATCH -J score_MRI
 #SBATCH -o slurm/%j.out
 #SBATCH -e slurm/%j.err
-#SBATCH -N 1
-#SBATCH -t 00:59:00
+#SBATCH -N 2
+#SBATCH -t 01:59:00
 ##SBATCH -S 0
 #SBATCH --ntasks-per-node=8
 #SBATCH --cpus-per-task=4
 #SBATCH -C nvme
 #BATCH -q debug
 
-#source sbcast_env.sh
+# source sbcast_env.sh
 # module purge
 module load PrgEnv-gnu
 module load gcc/11.2.0
@@ -23,11 +23,6 @@ export https_proxy=http://proxy.ccs.ornl.gov:3128/
 source /autofs/nccs-svm1_sw/frontier/python/3.10/miniforge3/23.11.0/etc/profile.d/conda.sh
 conda activate /ccs/home/palashmr/packages/miniconda/pyt_env/transfusion
 
-
-
-#conda activate  /lustre/orion/stf218/world-shared/palashmr/py310_frontier
-#export LD_LIBRARY_PATH=/opt/rocm-6.0.0/include/rccl/build:$PWD/aws-ofi-rccl/src/.libs/:/opt/cray/libfabric/1.15.2.0/lib64/:/opt/rocm-6.0.0/lib #slingshot
-#export LD_LIBRARY_PATH=$PWD/aws-ofi-rccl/src/.libs/:/opt/cray/libfabric/1.15.2.0/lib64/ #slingshot, this line should be enough instead of above: need verifiction
 
 export NCCL_NET_GDR_LEVEL=3
 

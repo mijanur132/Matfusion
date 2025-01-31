@@ -162,6 +162,11 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
 
     print("valid_len",len(valid_dataloader))
 
+    checkpoint_dir = f'/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/fnd_sg2_unet_{dim_latent}_{mod_shape}_{xdim}_{xdepth}'
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    checkpoint_files = glob.glob(os.path.join(checkpoint_dir, "checkpoint_*.pth"))
+    checkpoint_files.sort(key=os.path.getmtime, reverse=True)
+
     class Encoder(Module):
         def forward(self, x):
             x = rearrange(x, '... 1 (h p1) (w p2) -> ... h w (p1 p2)', p1 = 2, p2 = 2)
@@ -196,72 +201,60 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
         )
     )
     model = model.to(device)
-    model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
-    ema_model = model.module.create_ema().to(device)
-    #optimizer = optim.Adam(model.parameters(), lr=3e-6)  
-    #optimizer = Adam(model.module.parameters_without_encoder_decoder(), lr = 3e-4)
-
     state = dict( model_state = model.state_dict(), step=0, epoch=0)
-    checkpoint_dir = f'/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/fnd_sg_unet_{dim_latent}_{mod_shape}_{xdim}_{xdepth}'
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    checkpoint_files = glob.glob(os.path.join(checkpoint_dir, "checkpoint_*.pth"))
-    checkpoint_files.sort(key=os.path.getmtime, reverse=True)
-    initial_step = int(state['step'])
-    initial_epoch = int(state['epoch'])    
+    initial_step =0
+    initial_epoch = 0
     want_checkpt = 1
-    delete_chkpt =0
-    if delete_chkpt:
-        rmtree(checkpoint_dir, ignore_errors = True)
-        os.makedirs(checkpoint_dir, exist_ok=True)
 
-    if checkpoint_files and want_checkpt:
-        latest_checkpoint = checkpoint_files[0]
-        if rank==0:
-            print(f"latest checkpoint.................:{latest_checkpoint}")
-            checkpoint_dir_temp = os.path.join(checkpoint_dir, latest_checkpoint)
-            state = restore_checkpoint(checkpoint_dir_temp, state, device)
-            model.load_state_dict(state['model_state'])
-            initial_epoch = int(state['epoch'])+1
-            initial_step = int(state['step'])+1
-            print("initial_epoch:", initial_epoch)
-        else:
-            latest_checkpoint = None
-            print("No checkpoint files found..........")
-
+    if  want_checkpt:
+        ckpt = "/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/fnd_sg2_unet_28_28_256_4/checkpoint_fnd_sg2_46_13800.pth"
+        checkpoint = torch.load(ckpt, map_location="cpu")  # or device
+        model_state = checkpoint["model_state"]  # or however you stored it
+        new_state_dict = {}
+        for key, val in model_state.items():
+            new_key = key.replace("module.", "")  # strip out "module." if it exists
+            new_state_dict[new_key] = val
+        missing, unexpected = model.load_state_dict(new_state_dict, strict=True)
+        print("Missing keys:", missing)
+        print("Unexpected keys:", unexpected)
+        model.load_state_dict(new_state_dict, strict=True)
     
     for param in model.parameters():
         param.requires_grad = False
 
-
     new_model = TransfusionWithClassifier(
                                     model, 
-                                    in_dim=dim_latent//2,   # or whatever the old model outputs
+                                    in_dim=dim_latent,   # or whatever the old model outputs
                                     out_dim=3   # number of classes
                                 )
+        
+    want_checkpt = 0
+    if checkpoint_files and want_checkpt:
+        latest_checkpoint = checkpoint_files[0]
+        print(f"latest checkpoint.................:{latest_checkpoint}")
+        checkpoint_dir_temp = os.path.join(checkpoint_dir, latest_checkpoint)
+        #state = restore_checkpoint(checkpoint_dir_temp, state, device)
+        checkpoint = torch.load(checkpoint_dir_temp, map_location=device)
+        new_model.classifier.load_state_dict(checkpoint["classifier"])
+        new_model.conv_block.load_state_dict(checkpoint["conv_block"])
+        initial_step =checkpoint["step"]
+        initial_epoch = checkpoint["epoch"]
+
     new_model = new_model.to(device)
     new_model = DDP(new_model, device_ids=[local_rank], find_unused_parameters=True)
     trainable_params =  list(new_model.module.conv_block.parameters()) + list(new_model.module.classifier.parameters())
-    # list(model.module.parameters())
-
-    optimizer = torch.optim.Adam(trainable_params, lr=1e-3)
+    optimizer = torch.optim.Adam(trainable_params, lr=1e-4)
     criterion = torch.nn.CrossEntropyLoss()
 
-
-
-    num_epochs=100
+    num_epochs=1000
     scaler = GradScaler()
     glob_step = 0
     accum_itr = 1
     if rank==0:
         wandb.init( project="transfusion")
 
-    save_path = f"/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/transfusion_pytorch/output_sample/fnd_sg_unet_{dim_latent}_{mod_shape}_{xdim}_{xdepth}/"
-    rmtree(save_path, ignore_errors = True)
-    os.makedirs(save_path, exist_ok=True)
-
-    
     print("dataloader length:", len(joint_dataloader), len(valid_dataloader))
-    for epoch in range(initial_epoch, num_epochs):
+    for epoch in range(initial_epoch, 500):
         print("epoch:",epoch)
         joint_sampler.set_epoch (epoch)
         optimizer.zero_grad()
@@ -270,53 +263,42 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
             images = next(iter_dl)
             im_list = []
             lab_list = []
-                   
             label_map = {1: 0, 3: 1, 14: 2}
 
             for im,label in images:
-                
                 im_list.append(im)
                 old_label_val = int(label.item())
-                #print(label)
                 new_label_val = label_map[old_label_val]
                 new_label_tensor = torch.tensor(new_label_val)
                 lab_list.append(new_label_tensor)
             images_tensor = torch.stack(im_list, dim=0)
-            print(images_tensor.shape)
             labels_tensor = torch.stack(lab_list, dim=0).to(device)
             output = new_model(images_tensor)#, return_loss = True)#, modality_type = 1)
-     
             loss = criterion(output, labels_tensor)
             loss = loss/accum_itr   #grad accumulation
             loss.backward()
             _, predicted_labels = torch.max(output, 1)
             correct_predictions = (predicted_labels == labels_tensor).sum().item()
             accuracy = correct_predictions / labels_tensor.size(0)
-
-            # print(f"Predicted labels: {predicted_labels}")
-            # print("correct labels:", labels_tensor)
-            # print(f"Correct predictions: {correct_predictions}")
-            print(f"Accuracy: {accuracy * 100:.2f}%")
-
             torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
             if ((step+1)% accum_itr == 0 or (step+1) == len(joint_dataloader) ):
                 optimizer.step()
                 optimizer.zero_grad()
-               # ema_model.update()
             if rank == 0:
                 if step%1 == 0:
-                    print("epoch step loss lr.............................: ",epoch, glob_step, loss.item())
+                    #print("epoch step loss lr.............................: ",epoch, glob_step, loss.item())
                     wandb.log({"glob_step": glob_step, "train_loss": loss.item(), "accu": accuracy*100})
-                if step >500 and step%500 == 0:
-                    state['epoch']=epoch
-                    state['step']=step
+                if step >500 and step%1000 == 0:
+                    os.makedirs(checkpoint_dir, exist_ok=True)
+                    name = os.path.join(checkpoint_dir, f'checkpoint_class_newmodel_{epoch}_{step}.pth')
+                    torch.save({
+                                "epoch": epoch,
+                                "step": step,
+                                "classifier": new_model.module.classifier.state_dict(),
+                                "conv_block": new_model.module.conv_block.state_dict(),
+                            }, name)
 
-                    # rmtree(checkpoint_dir, ignore_errors = True)
-                    # os.makedirs(checkpoint_dir, exist_ok=True)
-
-                    #save_checkpoint(os.path.join(checkpoint_dir, f'checkpoint_classification_{epoch}_{step}.pth'), state)
-                    print(f'chepoint saved: checkpoint_{epoch}_{step}.pth')
-                  
+                    print(f'chepoint saved: checkpoint_class_newmodel_{epoch}_{step}.pth')
 
     dist.destroy_process_group()
 

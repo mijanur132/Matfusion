@@ -1121,7 +1121,7 @@ class TransfusionWithClassifier(torch.nn.Module):
         )
         # Adding new layers
         self.classifier = torch.nn.Sequential(
-            torch.nn.Linear(in_features=401408, out_features=256),  # Example sizes
+            torch.nn.Linear(in_features=401408//2, out_features=256),  # Example sizes
             torch.nn.ReLU(),
             torch.nn.Dropout(0.5),
             torch.nn.Linear(256, out_dim)  # Assuming 10 classes for classification
@@ -1131,12 +1131,9 @@ class TransfusionWithClassifier(torch.nn.Module):
         with torch.no_grad():
             x = self.feature_extractor(x)  # Feature extraction phase, gradients not needed
         x = x.unsqueeze(1)
-        print(x.shape)
         x = self.conv_block(x)
-        print(x.shape)
         x = x.view(x.size(0), -1)  # -> [B, 16*98*128]
         x = self.classifier(x)  # Classification phase
-        print("palashx,",x.shape)
         return x
 
 
@@ -2068,18 +2065,11 @@ class Transfusion(Module):
             noised_tokens = noised_tokens + axial_pos_emb
 
         # attention
-        print("noised_tokens", noised_tokens.shape)
         embed = self.transformer(
             noised_tokens,
             times = times,
             modality_only = True,
         )
-        #print("ret palash2", embed.shape) #2*196*256
-        #embed = inverse_pack_axial_dims(embed)
-
-        #embed_dim_latent = mod.model_to_latent(embed)  #Linear(dim, dim_latent, bias = False)
-
-        #print("ret palash2", embed_dim_latent.shape) #2,14,14, dim_latent
         return embed
 
     def generate_modality_only(
@@ -2170,8 +2160,6 @@ class Transfusion(Module):
         is_text_only = is_tensor(modalities) and modalities.dtype in (torch.int, torch.long)
         is_modality_only = is_tensor(modalities) and modalities.dtype == torch.float
 
-        print("is_modality_only", is_tensor(modalities),is_modality_only)
-
         # handle ema model being passed in for velocity consistency loss
 
         if isinstance(velocity_consistency_ema_model, EMA):
@@ -2204,7 +2192,7 @@ class Transfusion(Module):
             )
 
             return self.forward_modality_classification(modalities, **forward_modality_kwargs)
-            # print("palash 3")
+      
             # return self.forward_modality(modalities, **forward_modality_kwargs)
 
         batch = len(modalities)
