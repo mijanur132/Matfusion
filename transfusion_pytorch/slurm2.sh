@@ -3,7 +3,7 @@
 #SBATCH -J score_MRI
 #SBATCH -o slurm/%j.out
 #SBATCH -e slurm/%j.err
-#SBATCH -N 1
+#SBATCH -N 8
 #SBATCH -t 00:59:00
 ##SBATCH -S 0
 #SBATCH --ntasks-per-node=8

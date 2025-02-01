@@ -228,9 +228,10 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
                                     out_dim=3   # number of classes
                                 )
         
-    want_checkpt = 0
+    want_checkpt = 1
     if checkpoint_files and want_checkpt:
-        latest_checkpoint = checkpoint_files[0]
+        #latest_checkpoint = checkpoint_files[0]
+        latest_checkpoint = "/lustre/orion/stf218/proj-shared/brave/transfusion-pytorch/checkpoints/fnd_sg2_unet_28_28_256_4/checkpoint_class_newmodel_230_1000.pth"
         print(f"latest checkpoint.................:{latest_checkpoint}")
         checkpoint_dir_temp = os.path.join(checkpoint_dir, latest_checkpoint)
         #state = restore_checkpoint(checkpoint_dir_temp, state, device)
@@ -243,7 +244,7 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
     new_model = new_model.to(device)
     new_model = DDP(new_model, device_ids=[local_rank], find_unused_parameters=True)
     trainable_params =  list(new_model.module.conv_block.parameters()) + list(new_model.module.classifier.parameters())
-    optimizer = torch.optim.Adam(trainable_params, lr=1e-4)
+    optimizer = torch.optim.Adam(trainable_params, lr=1e-6)
     criterion = torch.nn.CrossEntropyLoss()
 
     num_epochs=1000
@@ -254,7 +255,7 @@ def train_transfusion(_dim_latent, _mod_shape, _xdim, _xdepth):
         wandb.init( project="transfusion")
 
     print("dataloader length:", len(joint_dataloader), len(valid_dataloader))
-    for epoch in range(initial_epoch, 500):
+    for epoch in range(initial_epoch, 2500):
         print("epoch:",epoch)
         joint_sampler.set_epoch (epoch)
         optimizer.zero_grad()
